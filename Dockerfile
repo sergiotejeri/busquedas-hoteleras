@@ -3,8 +3,17 @@ WORKDIR /workspace
 COPY .mvn/ .mvn/
 COPY mvnw pom.xml ./
 RUN chmod +x mvnw
+COPY config/ config/
 COPY src/ src/
 RUN ./mvnw -B -ntp clean verify
+
+FROM scratch AS reports
+COPY --from=build /workspace/target/site/jacoco/ /jacoco/
+COPY --from=build /workspace/target/spotbugsXml.xml /spotbugs.xml
+COPY --from=build /workspace/target/pmd.xml /pmd.xml
+COPY --from=build /workspace/target/pmd.xml.tests.xml /pmd-tests.xml
+COPY --from=build /workspace/target/pmd.xml.cpd.xml /cpd.xml
+COPY --from=build /workspace/target/surefire-reports/ /tests/
 
 FROM eclipse-temurin:25-jre@sha256:fd4b1c02c64eef378212e23656fc0b0caa41a357876fa0b60e51ceda94a3db64
 WORKDIR /app

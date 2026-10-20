@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="pmd-analysis" default="check">
+    <target name="duplicates">
+        <taskdef name="cpd" classname="net.sourceforge.pmd.ant.CPDTask"/>
+        <cpd minimumTokenCount="100" encoding="UTF-8" format="xml"
+             ignoreAnnotations="true" failOnError="true" outputFile="${pmd.report.file}.cpd.xml">
+            <fileset dir="${pmd.source.directory}" includes="**/*.java"/>
+        </cpd>
+        <loadfile property="cpd.report" srcFile="${pmd.report.file}.cpd.xml" encoding="UTF-8"/>
+        <fail message="CPD found duplicate Java blocks of at least 100 tokens. Review the XML report.">
+            <condition><contains string="${cpd.report}" substring="&lt;duplication "/></condition>
+        </fail>
+    </target>
+    <target name="check" depends="duplicates">
+        <taskdef name="pmd" classname="net.sourceforge.pmd.ant.PMDTask"/>
+        <pmd minimumPriority="5" failOnError="true" failOnRuleViolation="true"
+             noCache="true" encoding="UTF-8">
+            <sourceLanguage name="java" version="${pmd.language.version}"/>
+            <ruleset>${basedir}/pmd-production.xml</ruleset>
+            <auxclasspath>
+                <pathelement location="${pmd.java.home}/lib/jrt-fs.jar"/>
+                <pathelement path="${pmd.compile.classpath}"/>
+            </auxclasspath>
+            <fileset dir="${pmd.source.directory}/main/java" includes="**/*.java"/>
+            <formatter type="xml" toFile="${pmd.report.file}"/>
+            <formatter type="text" toConsole="true"/>
+        </pmd>
+        <pmd minimumPriority="5" failOnError="true" failOnRuleViolation="true"
+             noCache="true" encoding="UTF-8">
+            <sourceLanguage name="java" version="${pmd.language.version}"/>
+            <ruleset>${basedir}/pmd-common.xml</ruleset>
+            <auxclasspath>
+                <pathelement location="${pmd.java.home}/lib/jrt-fs.jar"/>
+                <pathelement path="${pmd.compile.classpath}"/>
+            </auxclasspath>
+            <fileset dir="${pmd.source.directory}/test/java" includes="**/*.java"/>
+            <formatter type="xml" toFile="${pmd.report.file}.tests.xml"/>
+            <formatter type="text" toConsole="true"/>
+        </pmd>
+    </target>
+</project>

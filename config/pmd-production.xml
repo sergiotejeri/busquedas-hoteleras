@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ruleset name="Production design" xmlns="http://pmd.sourceforge.net/ruleset/2.0.0">
+    <description>Controles comunes y reglas de diseno del codigo productivo.</description>
+    <rule ref="pmd-common.xml"/>
+    <rule ref="category/java/design.xml">
+        <!-- Reglas obsoletas; siguen activos los controles de excepciones y parametros. -->
+        <exclude name="AvoidCatchingGenericException"/>
+        <exclude name="UseObjectForClearerAPI"/>
+        <!-- Requiere una politica de paquetes; se definira con la arquitectura. -->
+        <exclude name="LoosePackageCoupling"/>
+    </rule>
+</ruleset>

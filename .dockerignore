@@ -6,3 +6,5 @@
 !src/
 !src/**
 !Dockerfile
+!config/
+!config/**

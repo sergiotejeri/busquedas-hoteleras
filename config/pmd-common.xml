@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ruleset name="Java quality" xmlns="http://pmd.sourceforge.net/ruleset/2.0.0">
+    <description>Errores, buenas practicas y rendimiento en codigo y pruebas.</description>
+    <rule ref="category/java/errorprone.xml"/>
+    <rule ref="category/java/performance.xml"/>
+    <rule ref="category/java/bestpractices.xml"/>
+</ruleset>
