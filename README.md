@@ -4,7 +4,13 @@ Servicio para registrar búsquedas hoteleras y consultar cuántas coinciden con 
 
 ## Estado
 
-Base generada con [Spring Initializr](https://start.spring.io/): Maven, Java 21 y Spring Web MVC. Incluye la clase principal y una prueba de carga del contexto. Todavía no hay endpoints de negocio ni conexiones a Oracle o Kafka.
+Base generada con [Spring Initializr](https://start.spring.io/): Maven, Java 21 y Spring Web MVC. Incluye el modelo de criterios de búsqueda, sus pruebas unitarias y una prueba de carga del contexto. Todavía no hay endpoints de negocio ni conexiones a Oracle o Kafka.
+
+## Criterios de búsqueda
+
+`SearchCriteria` pertenece al dominio y solo depende de Java. Exige un hotel no nulo ni blanco, fechas no nulas con entrada anterior a salida y una lista no vacía de edades no nulas y mayores o iguales a cero. Una infracción produce `InvalidSearchException`, con código, campo y mensaje; su traducción a HTTP se incorporará con el adaptador web.
+
+El record conserva una copia inmutable de las edades. No impone fechas futuras ni un máximo de edad adicional. Como decisión de implementación, la igualdad incluye todos los campos, conserva el orden y las repeticiones de edades y no normaliza el identificador del hotel. Así, `[30, 1]` y `[1, 30]` son criterios diferentes. Esta decisión hace explícita la interpretación adoptada ante la contradicción entre el texto y el ejemplo del enunciado.
 
 ## Construir y comprobar
 
@@ -14,7 +20,7 @@ Se necesita Docker con contenedores Linux y acceso a Internet en la primera cons
 docker build --progress=plain -t busquedas-hoteleras .
 ```
 
-La construcción ejecuta `clean verify`, incluida la prueba de arranque y los controles de calidad, y genera la imagen ejecutable. La prueba inicia el contexto a través de `main` y comprueba que queda activo; todavía no verifica reglas de negocio.
+La construcción ejecuta `clean verify`, incluidas las pruebas del dominio, la prueba de arranque y los controles de calidad, y genera la imagen ejecutable. Las pruebas del dominio comprueban validaciones, igualdad y copia defensiva; la prueba de arranque inicia el contexto a través de `main` y comprueba que queda activo.
 
 ## Controles de calidad
 
