@@ -26,6 +26,16 @@ Estos tipos solo modelan el contrato interno. Todavía no ejecutan transiciones,
 
 El contrato del puerto exige registrar solicitud y publicación pendiente de forma atómica y retornar después del commit. Todavía no hay adaptador de persistencia: las pruebas unitarias verifican la coordinación, no durabilidad ni transacciones reales. El generador permite pruebas deterministas; el cableado productivo y la garantía de unicidad en persistencia se incorporarán con los adaptadores. El servicio no mantiene estado por petición; la seguridad concurrente también dependerá de sus colaboradores.
 
+## Formato de eventos y criterios almacenados
+
+`infrastructure.serialization` contiene los codecs JSON, sin filtrar dependencias de Jackson al dominio ni a la aplicación. Se reutiliza Jackson incluido en Spring Boot, con configuración propia para este contrato interno.
+
+El evento v1 contiene `schemaVersion`, `searchId`, `hotelId`, `checkIn`, `checkOut` y `ages`. Se escribe en UTF-8, con fechas `dd/MM/uuuu` y orden de propiedades explícito. La lectura exige campos completos, tipos correctos, fechas reales y criterios válidos. Rechaza propiedades desconocidas o duplicadas, documentos concatenados y conversiones implícitas de cadenas o decimales a edades. Una versión desconocida produce `UNSUPPORTED_SCHEMA`; un contenido inválido, `INVALID_EVENT`, sin incluir el payload en el mensaje.
+
+`CanonicalCriteriaCodec` representa únicamente los criterios con fechas ISO (`uuuu-MM-dd`) y orden de propiedades explícito. Conserva hotel, orden y repeticiones de edades, sin incorporar el ID ni la versión del evento. Esta es una representación interna determinista, no una implementación de un estándar general de JSON canónico. Un contenido almacenado inválido produce un error de estado.
+
+Estos contratos son decisiones técnicas del proyecto. Todavía no hay productor, consumidor ni persistencia. La validación del formato no detecta una alteración que siga siendo válida: comprobar la coincidencia con la solicitud aceptada corresponderá al procesamiento. Los límites de tamaño y la agrupación se incorporarán con sus adaptadores.
+
 ## Construir y comprobar
 
 Se necesita Docker con contenedores Linux y acceso a Internet en la primera construcción. No es necesario instalar Java ni Maven en el equipo.
