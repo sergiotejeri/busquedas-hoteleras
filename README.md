@@ -12,6 +12,14 @@ Base generada con [Spring Initializr](https://start.spring.io/): Maven, Java 21 
 
 El record conserva una copia inmutable de las edades. No impone fechas futuras ni un máximo de edad adicional. Como decisión de implementación, la igualdad incluye todos los campos, conserva el orden y las repeticiones de edades y no normaliza el identificador del hotel. Así, `[30, 1]` y `[1, 30]` son criterios diferentes. Esta decisión hace explícita la interpretación adoptada ante la contradicción entre el texto y el ejemplo del enunciado.
 
+## Solicitudes y resultados
+
+`SearchSubmission` une un UUID obligatorio con los criterios validados. Recibe el identificador; su generación por solicitud corresponde al caso de uso de aceptación, todavía pendiente.
+
+`SearchStatus` distingue `PENDING`, `PROCESSED` y `FAILED`. `CountResult` exige identificador y estado. Un resultado procesado incluye criterios y un conteo positivo (la propia búsqueda cuenta). Un resultado pendiente o fallido no expone criterios ni conteo: ausencia de resultado no equivale a cero. Estas invariantes se comprueban al construir los objetos.
+
+Estos tipos solo modelan el contrato interno. Todavía no ejecutan transiciones, consultas ni procesamiento asíncrono, y no determinan por sí solos una respuesta HTTP.
+
 ## Construir y comprobar
 
 Se necesita Docker con contenedores Linux y acceso a Internet en la primera construcción. No es necesario instalar Java ni Maven en el equipo.
