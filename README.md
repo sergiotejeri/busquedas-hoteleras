@@ -20,6 +20,12 @@ El record conserva una copia inmutable de las edades. No impone fechas futuras n
 
 Estos tipos solo modelan el contrato interno. Todavía no ejecutan transiciones, consultas ni procesamiento asíncrono, y no determinan por sí solos una respuesta HTTP.
 
+## Aceptación de solicitudes
+
+`AcceptSearchService` recibe criterios ya validados, solicita un UUID al generador inyectado y entrega una `SearchSubmission` al puerto `AcceptSearchPort`. Devuelve el ID únicamente después del retorno correcto del puerto; no deduplica solicitudes iguales ni oculta excepciones. Rechaza criterios, dependencias o identificadores generados nulos.
+
+El contrato del puerto exige registrar solicitud y publicación pendiente de forma atómica y retornar después del commit. Todavía no hay adaptador de persistencia: las pruebas unitarias verifican la coordinación, no durabilidad ni transacciones reales. El generador permite pruebas deterministas; el cableado productivo y la garantía de unicidad en persistencia se incorporarán con los adaptadores. El servicio no mantiene estado por petición; la seguridad concurrente también dependerá de sus colaboradores.
+
 ## Construir y comprobar
 
 Se necesita Docker con contenedores Linux y acceso a Internet en la primera construcción. No es necesario instalar Java ni Maven en el equipo.
@@ -36,7 +42,7 @@ Los controles forman parte de `verify`: un incumplimiento hace fallar la constru
 
 | Control | Alcance |
 | --- | --- |
-| ArchUnit 1.5.1 | Dependencias del dominio sobre clases de producción; rechaza frameworks, otras capas y JDBC, y falla si no encuentra clases de dominio. |
+| ArchUnit 1.5.1 | Dependencias del dominio y de la aplicación sobre clases de producción; rechaza frameworks, otras capas y JDBC, y falla si no encuentra clases de dominio. |
 | PMD 7.28.0 | Reglas de errores, buenas prácticas y rendimiento en producción y tests; reglas de diseño adicionales en producción. Prioridades 1–5. |
 | SpotBugs 4.10.5 | Bytecode de producción y tests, esfuerzo máximo y umbral de confianza bajo. |
 | CPD 7.28.0 | Bloques Java duplicados de al menos 100 tokens, ignorando anotaciones. |
@@ -52,11 +58,11 @@ docker build --target reports --output type=local,dest=target/quality .
 
 Abre `target/quality/jacoco/index.html` para consultar cobertura. En la misma carpeta están los informes XML de los análisis y los resultados de las pruebas. `target/` está excluido de Git.
 
-PMD se ejecuta en un proceso separado con el classpath del proyecto y del JDK para resolver los tipos. Las reglas están en `config/`. Se excluyen dos reglas de diseño obsoletas y `LoosePackageCoupling`, que requiere una política de paquetes; la independencia del dominio ya se comprueba con ArchUnit y las reglas de aplicación e infraestructura se ampliarán cuando existan esas capas. SpotBugs y JaCoCo no tienen exclusiones.
+PMD se ejecuta en un proceso separado con el classpath del proyecto y del JDK para resolver los tipos. Las reglas están en `config/`. Se excluyen dos reglas de diseño obsoletas y `LoosePackageCoupling`, que requiere una política de paquetes; la independencia del dominio y de la aplicación ya se comprueba con ArchUnit; las reglas se ampliarán al introducir infraestructura. SpotBugs y JaCoCo no tienen exclusiones.
 
 Mockito se carga como agente al iniciar la JVM de pruebas, conservando también el agente JaCoCo. La opción `-Xshare:off` se aplica solo a esas JVM porque la instrumentación de Mockito limita el uso de CDS. La imagen de ejecución no incorpora estos agentes ni esa opción.
 
-La prueba `DomainArchitectureTest` usa el núcleo de [ArchUnit](https://www.archunit.org/userguide/html/000_Index.html) con JUnit, sin añadir otro motor de pruebas. ArchUnit tiene alcance `test` y no forma parte de la aplicación ejecutable. La regla admite dependencias del dominio hacia Java y el propio dominio, excepto JDBC; analiza bytecode y no certifica por sí sola que cada responsabilidad esté en la capa correcta.
+La prueba `DomainArchitectureTest` usa el núcleo de [ArchUnit](https://www.archunit.org/userguide/html/000_Index.html) con JUnit, sin añadir otro motor de pruebas. ArchUnit tiene alcance `test` y no forma parte de la aplicación ejecutable. Las reglas admiten dependencias del dominio hacia Java y el propio dominio, y de aplicación hacia Java, dominio y aplicación, excepto JDBC; analiza bytecode y no certifica por sí sola que cada responsabilidad esté en la capa correcta.
 
 ## Arrancar
 
