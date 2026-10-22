@@ -4,7 +4,7 @@ Servicio para registrar búsquedas hoteleras y consultar cuántas coinciden con 
 
 ## Estado
 
-Base generada con [Spring Initializr](https://start.spring.io/): Maven, Java 21 y Spring Web MVC. Incluye el modelo de criterios de búsqueda, sus pruebas unitarias y una prueba de carga del contexto. Todavía no hay endpoints de negocio ni conexiones a Oracle o Kafka.
+Base generada con [Spring Initializr](https://start.spring.io/): Maven, Java 21 y Spring Web MVC. Incluye el modelo de criterios de búsqueda, sus pruebas unitarias y una prueba de carga del contexto. La persistencia en Oracle se prueba por integración. Todavía faltan los endpoints de negocio y Kafka.
 
 ## Criterios de búsqueda
 
@@ -24,7 +24,7 @@ Estos tipos solo modelan el contrato interno. Todavía no ejecutan transiciones,
 
 `AcceptSearchService` recibe criterios ya validados, solicita un UUID al generador inyectado y entrega una `SearchSubmission` al puerto `AcceptSearchPort`. Devuelve el ID únicamente después del retorno correcto del puerto; no deduplica solicitudes iguales ni oculta excepciones. Rechaza criterios, dependencias o identificadores generados nulos.
 
-El contrato del puerto exige registrar solicitud y publicación pendiente de forma atómica y retornar después del commit. Todavía no hay adaptador de persistencia: las pruebas unitarias verifican la coordinación, no durabilidad ni transacciones reales. El generador permite pruebas deterministas; el cableado productivo y la garantía de unicidad en persistencia se incorporarán con los adaptadores. El servicio no mantiene estado por petición; la seguridad concurrente también dependerá de sus colaboradores.
+`OracleAcceptanceAdapter` guarda la solicitud y el evento pendiente en una transacción. Devuelve el control después del commit. Falta conectarlo al endpoint.
 
 ## Formato de eventos y criterios almacenados
 
@@ -34,7 +34,7 @@ El evento v1 contiene `schemaVersion`, `searchId`, `hotelId`, `checkIn`, `checkO
 
 `CanonicalCriteriaCodec` representa únicamente los criterios con fechas ISO (`uuuu-MM-dd`) y orden de propiedades explícito. Conserva hotel, orden y repeticiones de edades, sin incorporar el ID ni la versión del evento. Esta es una representación interna determinista, no una implementación de un estándar general de JSON canónico. Un contenido almacenado inválido produce un error de estado.
 
-Estos contratos son decisiones técnicas del proyecto. Todavía no hay productor, consumidor ni persistencia. La validación del formato no detecta una alteración que siga siendo válida: comprobar la coincidencia con la solicitud aceptada corresponderá al procesamiento. Los límites de tamaño y la agrupación se incorporarán con sus adaptadores.
+Estos contratos son decisiones técnicas del proyecto. Todavía no hay productor ni consumidor de Kafka. La validación del formato no detecta una alteración que siga siendo válida: comprobar la coincidencia con la solicitud aceptada corresponderá al procesamiento. El límite de tamaño se comprueba al aceptar; la agrupación se incorporará con el procesamiento.
 
 ## Construir y comprobar
 
@@ -68,7 +68,7 @@ docker build --target reports --output type=local,dest=target/quality .
 
 Abre `target/quality/jacoco/index.html` para consultar cobertura. En la misma carpeta están los informes XML de los análisis y los resultados de las pruebas. `target/` está excluido de Git.
 
-PMD se ejecuta en un proceso separado con el classpath del proyecto y del JDK para resolver los tipos. Las reglas están en `config/`. Se excluyen dos reglas de diseño obsoletas y `LoosePackageCoupling`, que requiere una política de paquetes; la independencia del dominio y de la aplicación ya se comprueba con ArchUnit; las reglas se ampliarán al introducir infraestructura. SpotBugs y JaCoCo no tienen exclusiones.
+PMD se ejecuta en un proceso separado con el classpath del proyecto y del JDK para resolver los tipos. Las reglas están en `config/`. Se excluyen dos reglas de diseño obsoletas y `LoosePackageCoupling`, que requiere una política de paquetes; la independencia del dominio y de la aplicación ya se comprueba con ArchUnit; las reglas se ampliarán al introducir infraestructura. JaCoCo no tiene exclusiones. SpotBugs tiene una supresión local documentada en la preparación de mocks JDBC: esa configuración no abre recursos ni ejecuta SQL.
 
 Mockito se carga como agente al iniciar la JVM de pruebas, conservando también el agente JaCoCo. La opción `-Xshare:off` se aplica solo a esas JVM porque la instrumentación de Mockito limita el uso de CDS. La imagen de ejecución no incorpora estos agentes ni esa opción.
 
@@ -104,7 +104,7 @@ El primer arranque puede tardar varios minutos. Reconstruye el ejecutor cuando c
 
 Flyway 13.10.3 crea las tablas de solicitudes y outbox mediante `V1__initial_schema.sql`. Las pruebas comprueban la conexión, la migración repetible, las restricciones y el rollback conjunto. Flyway `clean` está desactivado. Las dependencias se descargan de Maven Central; se deshabilita el repositorio autenticado adicional declarado por Flyway.
 
-Por ahora, la conexión y las migraciones se ejecutan desde las pruebas. El adaptador de aceptación y su configuración en Spring se añadirán en el siguiente paso.
+Por ahora, la conexión y las migraciones se configuran desde las pruebas. La configuración del adaptador en Spring y el endpoint se añadirán en el siguiente paso.
 
 Para detener Oracle conservando los datos:
 
@@ -113,3 +113,9 @@ docker compose stop oracle
 ```
 
 El volumen `oracle-data` conserva el esquema entre arranques. Los cambios posteriores se añadirán en nuevas migraciones, sin modificar las ya aplicadas.
+
+## Guardado de solicitudes
+
+La solicitud y su evento pendiente se guardan juntos en Oracle. Si falla una escritura, se deshacen ambas. Los IDs repetidos no sobrescriben datos.
+
+El evento puede ocupar hasta 262.144 bytes UTF-8. Si supera ese límite, se rechaza antes de guardar nada. Las pruebas cubren estos casos con Oracle real.
