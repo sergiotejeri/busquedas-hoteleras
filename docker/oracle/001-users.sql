@@ -1,0 +1,29 @@
+WHENEVER SQLERROR EXIT FAILURE
+ALTER SESSION SET CONTAINER = FREEPDB1;
+DECLARE
+    existing_tablespaces NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO existing_tablespaces FROM dba_tablespaces WHERE tablespace_name = 'SEARCH_DATA';
+    IF existing_tablespaces = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE TABLESPACE SEARCH_DATA DATAFILE ''/opt/oracle/oradata/FREE/FREEPDB1/search_data01.dbf'' SIZE 20M AUTOEXTEND ON NEXT 20M MAXSIZE 1G';
+    END IF;
+END;
+/
+DECLARE
+    existing_users NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO existing_users FROM dba_users WHERE username = 'SEARCH_APP';
+    IF existing_users = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE USER search_app IDENTIFIED BY "LocalOnly_App_2026"';
+    END IF;
+    SELECT COUNT(*) INTO existing_users FROM dba_users WHERE username = 'SEARCH_IT';
+    IF existing_users = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE USER search_it IDENTIFIED BY "LocalOnly_IT_2026"';
+    END IF;
+END;
+/
+GRANT CREATE SESSION, CREATE TABLE TO search_app;
+GRANT CREATE SESSION, CREATE TABLE TO search_it;
+ALTER USER search_app DEFAULT TABLESPACE SEARCH_DATA QUOTA 256M ON SEARCH_DATA;
+ALTER USER search_it DEFAULT TABLESPACE SEARCH_DATA QUOTA 256M ON SEARCH_DATA;
+EXIT;

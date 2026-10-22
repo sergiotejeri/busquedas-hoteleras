@@ -14,7 +14,7 @@ El record conserva una copia inmutable de las edades. No impone fechas futuras n
 
 ## Solicitudes y resultados
 
-`SearchSubmission` une un UUID obligatorio con los criterios validados. Recibe el identificador; su generación por solicitud corresponde al caso de uso de aceptación, todavía pendiente.
+`SearchSubmission` une un UUID obligatorio con los criterios validados. Recibe el identificador; su generación por solicitud corresponde al caso de uso de aceptación.
 
 `SearchStatus` distingue `PENDING`, `PROCESSED` y `FAILED`. `CountResult` exige identificador y estado. Un resultado procesado incluye criterios y un conteo positivo (la propia búsqueda cuenta). Un resultado pendiente o fallido no expone criterios ni conteo: ausencia de resultado no equivale a cero. Estas invariantes se comprueban al construir los objetos.
 
@@ -89,3 +89,27 @@ El servidor escucha en `http://localhost:8080`. La ruta `/` devuelve 404 porque 
 - JDK/JRE 25 en las imágenes Docker, fijadas por digest.
 
 El POM descargado indicaba `4.1.1.RELEASE`; se ajustó a `4.1.1`, el identificador disponible en Maven Central.
+
+## Oracle y pruebas de integración
+
+Compose arranca Oracle Database Free 23.26.3.0 Lite con usuarios separados para aplicación y pruebas. Las contraseñas son de desarrollo local y Oracle no expone puertos al exterior. Cada usuario tiene una cuota de 256 MB en `SEARCH_DATA`, cuyo tamaño máximo es 1 GB.
+
+```shell
+docker compose --profile test build integration-test
+docker compose up -d --wait oracle
+docker compose --profile test run --rm integration-test
+```
+
+El primer arranque puede tardar varios minutos. Reconstruye el ejecutor cuando cambie el código. El perfil `integration` ejecuta las pruebas con Oracle real, además de las pruebas habituales y los controles de calidad. Los informes se guardan en `test-results/`, excluido de Git: `failsafe-reports/` para integración y `site/jacoco/` para cobertura.
+
+Flyway 13.10.3 crea las tablas de solicitudes y outbox mediante `V1__initial_schema.sql`. Las pruebas comprueban la conexión, la migración repetible, las restricciones y el rollback conjunto. Flyway `clean` está desactivado. Las dependencias se descargan de Maven Central; se deshabilita el repositorio autenticado adicional declarado por Flyway.
+
+Por ahora, la conexión y las migraciones se ejecutan desde las pruebas. El adaptador de aceptación y su configuración en Spring se añadirán en el siguiente paso.
+
+Para detener Oracle conservando los datos:
+
+```shell
+docker compose stop oracle
+```
+
+El volumen `oracle-data` conserva el esquema entre arranques. Los cambios posteriores se añadirán en nuevas migraciones, sin modificar las ya aplicadas.

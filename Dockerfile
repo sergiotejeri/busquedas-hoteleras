@@ -7,6 +7,9 @@ COPY config/ config/
 COPY src/ src/
 RUN ./mvnw -B -ntp clean verify
 
+FROM build AS integration-test
+ENTRYPOINT ["sh", "-c", "./mvnw -B -ntp clean verify -Pintegration; result=$?; cp -R target/. /reports/ || exit 1; exit \"$result\""]
+
 FROM scratch AS reports
 COPY --from=build /workspace/target/site/jacoco/ /jacoco/
 COPY --from=build /workspace/target/spotbugsXml.xml /spotbugs.xml
