@@ -2,6 +2,7 @@ package com.example.busquedashoteleras.infrastructure.oracle;
 
 import com.example.busquedashoteleras.application.port.OutboxClaim;
 import com.example.busquedashoteleras.application.port.OutboxPort;
+import com.example.busquedashoteleras.domain.SearchStatus;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -16,7 +17,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 public final class OracleOutboxAdapter implements OutboxPort {
     private static final String SELECT_NEXT = """
-            SELECT search_id, event_json FROM search_outbox
+            SELECT search_id, event_json, retry_attempts FROM search_outbox
             WHERE state = 'READY' AND available_at <= SYSTIMESTAMP
             ORDER BY available_at, search_id FOR UPDATE SKIP LOCKED
             """;
@@ -29,6 +30,15 @@ public final class OracleOutboxAdapter implements OutboxPort {
             UPDATE search_outbox SET state = 'SENT', lease_token = NULL
             WHERE search_id = ? AND lease_token = ? AND state = 'READY'
                 AND available_at > SYSTIMESTAMP
+            """;
+    private static final String DEFER_EVENT = """
+            UPDATE search_outbox SET lease_token = NULL, retry_attempts = LEAST(retry_attempts + 1, 6),
+                available_at = SYSTIMESTAMP + NUMTODSINTERVAL(?, 'SECOND')
+            WHERE search_id = ? AND lease_token = ? AND state = 'READY' AND available_at > SYSTIMESTAMP
+            """;
+    private static final String CLOSE = """
+            UPDATE search_outbox SET state = ?, lease_token = NULL
+            WHERE search_id = ? AND lease_token = ? AND state = 'READY' AND available_at > SYSTIMESTAMP
             """;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
@@ -47,7 +57,7 @@ public final class OracleOutboxAdapter implements OutboxPort {
         if (lease.isZero() || lease.isNegative() || lease.compareTo(Duration.ofHours(1)) > 0) {
             throw new IllegalArgumentException("lease must be positive and no longer than one hour");
         }
-        BigDecimal seconds = BigDecimal.valueOf(lease.getSeconds()).add(BigDecimal.valueOf(lease.getNano(), 9));
+        BigDecimal seconds = seconds(lease);
         return Objects.requireNonNull(transaction.execute(status -> jdbc.query(SELECT_NEXT, statement -> {
             statement.setFetchSize(1);
             statement.setMaxRows(1);
@@ -56,7 +66,8 @@ public final class OracleOutboxAdapter implements OutboxPort {
                 return Optional.empty();
             }
             ByteBuffer id = ByteBuffer.wrap(rows.getBytes(1));
-            OutboxClaim claim = new OutboxClaim(new UUID(id.getLong(), id.getLong()), UUID.randomUUID(), rows.getString(2));
+            OutboxClaim claim = new OutboxClaim(new UUID(id.getLong(), id.getLong()), UUID.randomUUID(),
+                    rows.getString(2), rows.getInt(3));
             int updated = jdbc.update(RESERVE, raw(claim.token()), seconds, raw(claim.searchId()));
             return updated == 1 ? Optional.of(claim) : Optional.empty();
         })), "Reservation transaction must return a result");
@@ -71,5 +82,47 @@ public final class OracleOutboxAdapter implements OutboxPort {
 
     private static byte[] raw(UUID id) {
         return ByteBuffer.allocate(16).putLong(id.getMostSignificantBits()).putLong(id.getLeastSignificantBits()).array();
+    }
+
+    @Override
+    public boolean retry(UUID searchId, UUID token, Duration delay) {
+        Objects.requireNonNull(searchId, "searchId must not be null");
+        Objects.requireNonNull(token, "token must not be null");
+        Objects.requireNonNull(delay, "delay must not be null");
+        if (delay.isZero() || delay.isNegative() || delay.compareTo(Duration.ofSeconds(30)) > 0) {
+            throw new IllegalArgumentException("delay must be positive and no longer than 30 seconds");
+        }
+        return Boolean.TRUE.equals(transaction.execute(status ->
+                jdbc.update(DEFER_EVENT, seconds(delay), raw(searchId), raw(token)) == 1));
+    }
+
+    @Override
+    public boolean markFailed(UUID searchId, UUID token) {
+        Objects.requireNonNull(searchId, "searchId must not be null");
+        Objects.requireNonNull(token, "token must not be null");
+        return Boolean.TRUE.equals(transaction.execute(status -> closeFailedEvent(searchId, token)));
+    }
+
+    private boolean closeFailedEvent(UUID searchId, UUID token) {
+        // El consumidor tambien debera bloquear primero la solicitud y despues la outbox.
+        var states = jdbc.query("SELECT status FROM search_request WHERE search_id = ? FOR UPDATE",
+                (row, index) -> row.getString(1), raw(searchId));
+        if (states.isEmpty()) {
+            return false;
+        }
+        SearchStatus requestState = SearchStatus.valueOf(states.getFirst());
+        String outboxState = requestState == SearchStatus.PROCESSED ? "SENT" : "FAILED";
+        boolean closed = jdbc.update(CLOSE, outboxState, raw(searchId), raw(token)) == 1;
+        if (!closed) {
+            return false;
+        }
+        if (requestState == SearchStatus.PENDING) {
+            jdbc.update("UPDATE search_request SET status = 'FAILED' WHERE search_id = ?", raw(searchId));
+        }
+        return true;
+    }
+
+    private static BigDecimal seconds(Duration duration) {
+        return BigDecimal.valueOf(duration.getSeconds()).add(BigDecimal.valueOf(duration.getNano(), 9));
     }
 }

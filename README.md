@@ -33,7 +33,7 @@ Los datos inválidos devuelven `400` con código, campo y mensaje. El evento ser
 - Arquitectura hexagonal: dominio independiente de frameworks, aplicación dependiente del dominio y adaptadores en infraestructura. Los objetos del dominio son inmutables.
 - La igualdad conserva el identificador del hotel, las fechas y el orden y las repeticiones de edades. `[30, 1]` y `[1, 30]` son distintos. Es la interpretación adoptada ante la contradicción entre el texto y el ejemplo del enunciado.
 - La solicitud y el evento se guardan juntos en Oracle. El evento tiene un contrato JSON versionado; los criterios almacenados usan fechas ISO y una representación determinista.
-- La outbox permite reservar un evento con caducidad y un token nuevo. Una reserva vencida se puede recuperar; un token antiguo no puede confirmarla. La publicación automática se incorporará después.
+- La outbox reserva los eventos de uno en uno y confirma solo con el token vigente. El servicio admite hasta 100 por ciclo; ante un fallo transitorio aplaza el evento entre 1 y 30 segundos y detiene el ciclo. Un rechazo permanente se guarda sin degradar búsquedas ya procesadas. Kafka y el envío automático se incorporarán después.
 
 ## Pruebas y calidad
 
@@ -69,4 +69,4 @@ Java 21, Spring Boot 4.1.1 y Maven 3.10.0. Las imágenes usan JDK/JRE 25 y Oracl
 
 Compose separa los usuarios de aplicación y pruebas. Las contraseñas son de desarrollo local y Oracle no publica puertos. El volumen `oracle-data` conserva los datos entre arranques.
 
-Flyway aplica las migraciones al iniciar: V1 crea las tablas y V2 añade las reservas de outbox. `clean` está desactivado; los cambios de esquema se añaden mediante nuevas migraciones.
+Flyway aplica las migraciones al iniciar: V1 crea las tablas, V2 añade las reservas y V3 conserva el nivel de reintento. `clean` está desactivado; los cambios de esquema se añaden mediante nuevas migraciones.

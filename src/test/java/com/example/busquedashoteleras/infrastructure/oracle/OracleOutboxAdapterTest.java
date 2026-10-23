@@ -132,6 +132,52 @@ class OracleOutboxAdapterTest {
         return Stream.of(Duration.ZERO, Duration.ofNanos(-1), Duration.ofHours(2));
     }
 
+    @ParameterizedTest
+    @MethodSource("invalidRetryDelays")
+    void rejectsInvalidRetryWithoutOpeningConnection(Duration delay) {
+        DataSource source = mock(DataSource.class);
+        OracleOutboxAdapter adapter = new OracleOutboxAdapter(source);
+        assertAll(
+                () -> assertThrows(IllegalArgumentException.class, () -> adapter.retry(ID, ID, delay)),
+                () -> verifyNoInteractions(source));
+    }
+
+    @ParameterizedTest
+    @NullSource
+    void requiresRetryAndFailureIdentities(UUID missing) {
+        DataSource source = mock(DataSource.class);
+        OracleOutboxAdapter adapter = new OracleOutboxAdapter(source);
+        assertAll(
+                () -> assertThrows(NullPointerException.class, () -> adapter.retry(missing, ID, Duration.ofSeconds(1))),
+                () -> assertThrows(NullPointerException.class, () -> adapter.retry(ID, missing, Duration.ofSeconds(1))),
+                () -> assertThrows(NullPointerException.class, () -> adapter.markFailed(missing, ID)),
+                () -> assertThrows(NullPointerException.class, () -> adapter.markFailed(ID, missing)),
+                () -> verifyNoInteractions(source));
+    }
+
+    @ParameterizedTest
+    @NullSource
+    void requiresRetryDelay(Duration missing) {
+        DataSource source = mock(DataSource.class);
+        assertAll(
+                () -> assertThrows(NullPointerException.class, () -> new OracleOutboxAdapter(source).retry(ID, ID, missing)),
+                () -> verifyNoInteractions(source));
+    }
+
+    @Test
+    void retryPreservesFractionalDelay() throws SQLException {
+        DataSource source = mock(DataSource.class);
+        JdbcFixture fixture = connection(source, false);
+        assertAll(
+                () -> assertTrue(new OracleOutboxAdapter(source).retry(ID, ID, Duration.ofMillis(500)), "Debe aplazar"),
+                () -> verify(fixture.statement()).setObject(1, new BigDecimal("0.500000000")),
+                () -> verify(fixture.connection()).commit());
+    }
+
+    private static Stream<Duration> invalidRetryDelays() {
+        return Stream.of(Duration.ZERO, Duration.ofNanos(-1), Duration.ofSeconds(30).plusNanos(1));
+    }
+
     @SuppressFBWarnings(value = {"OBL_UNSATISFIED_OBLIGATION", "SQL_PREPARED_STATEMENT_GENERATED_FROM_NONCONSTANT_STRING"},
             justification = "Mockito stubbing does not open JDBC resources or execute the matched SQL")
     // Se configura next() en un mock; no se navega un ResultSet real.

@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.example.busquedashoteleras.application.port.OutboxClaim;
+import com.example.busquedashoteleras.application.port.PublicationResult;
+import com.example.busquedashoteleras.application.service.PublishOutboxService;
 import com.example.busquedashoteleras.infrastructure.serialization.SearchEventCodec;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -32,6 +34,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -42,6 +46,7 @@ class OracleOutboxIT {
     private static final DriverManagerDataSource SOURCE = new DriverManagerDataSource(
             required("TEST_DB_URL"), required("TEST_DB_USER"), required("TEST_DB_PASSWORD"));
     private static final Duration LEASE = Duration.ofMinutes(1);
+    private static final String READY_PENDING = "READY/PENDING";
     private final JdbcTemplate jdbc = new JdbcTemplate(SOURCE);
     private final OracleOutboxAdapter adapter = new OracleOutboxAdapter(SOURCE);
     private final List<UUID> ids = new ArrayList<>();
@@ -219,6 +224,140 @@ class OracleOutboxIT {
             jdbc.execute("ALTER TABLE search_outbox DROP CONSTRAINT " + constraint);
         }
         assertEquals(id, adapter.claimNext(LEASE).orElseThrow().searchId(), "Debe poder reservarse tras el rollback");
+    }
+
+    @Test
+    void retryRetainsEventAndPendingRequestUntilDue() {
+        UUID id = accept();
+        OutboxClaim claim = adapter.claimNext(LEASE).orElseThrow();
+        boolean retried = adapter.retry(id, claim.token(), Duration.ofSeconds(30));
+        assertAll(
+                () -> assertTrue(retried, "Debe aplazar la reserva vigente"),
+                () -> assertTrue(adapter.claimNext(LEASE).isEmpty(), "No debe reintentarse antes de tiempo"),
+                () -> assertEquals(READY_PENDING, states(id), "Un fallo transitorio no es terminal"),
+                () -> assertNull(storedToken(id), "Debe liberar la reserva"),
+                () -> assertEquals(1, retryAttempts(id), "Debe conservar el nivel de backoff"),
+                () -> assertEquals(claim.eventJson(), jdbc.queryForObject(
+                        "SELECT event_json FROM search_outbox WHERE search_id = HEXTORAW(?)", String.class, hex(id)),
+                        "No debe regenerar ni perder el evento"));
+    }
+
+    @Test
+    void retryLevelSurvivesNewAdaptersAndSaturatesWithoutDiscardingWork() {
+        UUID id = accept();
+        OracleOutboxAdapter retryAdapter = new OracleOutboxAdapter(SOURCE);
+        for (int attempt = 0; attempt < 8; attempt++) {
+            OutboxClaim claim = retryAdapter.claimNext(LEASE).orElseThrow();
+            if (!adapter.retry(id, claim.token(), Duration.ofSeconds(1))) {
+                throw new IllegalStateException("La reserva vigente debe admitir reintento");
+            }
+            expire(id);
+        }
+        OutboxClaim recovered = new OracleOutboxAdapter(SOURCE).claimNext(LEASE).orElseThrow();
+        assertAll(
+                () -> assertEquals(6, recovered.retryAttempts(), "El contador se satura, no desborda"),
+                () -> assertEquals(READY_PENDING, states(id), "No se descarta por agotar reintentos"));
+    }
+
+    @Test
+    void staleAndExpiredTokensCannotRetryOrFail() {
+        UUID id = accept();
+        OutboxClaim first = adapter.claimNext(LEASE).orElseThrow();
+        boolean foreignRetry = adapter.retry(id, UUID.randomUUID(), Duration.ofSeconds(1));
+        boolean foreignFail = adapter.markFailed(id, UUID.randomUUID());
+        expire(id);
+        boolean expiredRetry = adapter.retry(id, first.token(), Duration.ofSeconds(1));
+        boolean expiredFail = adapter.markFailed(id, first.token());
+        OutboxClaim current = adapter.claimNext(LEASE).orElseThrow();
+        boolean staleRetry = adapter.retry(id, first.token(), Duration.ofSeconds(1));
+        boolean staleFail = adapter.markFailed(id, first.token());
+        assertAll(
+                () -> assertFalse(foreignRetry || foreignFail || expiredRetry || expiredFail || staleRetry || staleFail,
+                        "Solo el token vigente y no vencido puede modificar"),
+                () -> assertEquals(hex(current.token()), storedToken(id), "Debe conservar el propietario actual"),
+                () -> assertEquals(0, retryAttempts(id), "No debe aumentar el contador"),
+                () -> assertEquals(READY_PENDING, states(id), "No debe alterar ninguno de los estados"));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"PENDING,FAILED/FAILED", "PROCESSED,SENT/PROCESSED", "FAILED,FAILED/FAILED"})
+    void permanentFailurePreservesProcessingState(String requestState, String expected) {
+        UUID id = accept();
+        jdbc.update("UPDATE search_request SET status = ? WHERE search_id = HEXTORAW(?)", requestState, hex(id));
+        OutboxClaim claim = adapter.claimNext(LEASE).orElseThrow();
+        boolean failed = adapter.markFailed(id, claim.token());
+        assertAll(
+                () -> assertTrue(failed, "Debe cerrar la reserva vigente"),
+                () -> assertEquals(expected, states(id), "No debe degradar una solicitud procesada"),
+                () -> assertNull(storedToken(id), "La reserva debe quedar liberada"),
+                () -> assertFalse(adapter.markFailed(id, claim.token()), "Repetir el fallo no cambia nada"),
+                () -> assertTrue(adapter.claimNext(LEASE).isEmpty(), "No debe reclamar un estado terminal"));
+    }
+
+    @Test
+    void failureOfRequestUpdateRollsBackOutboxTransition() {
+        UUID id = accept();
+        OutboxClaim claim = adapter.claimNext(LEASE).orElseThrow();
+        String constraint = "reject_" + hex(id).substring(0, 20);
+        jdbc.execute("ALTER TABLE search_request ADD CONSTRAINT " + constraint
+                + " CHECK (search_id <> HEXTORAW('" + hex(id) + "') OR status <> 'FAILED')");
+        try {
+            assertAll(
+                    () -> assertThrows(DataIntegrityViolationException.class, () -> adapter.markFailed(id, claim.token()),
+                            "Debe propagar el fallo de la segunda escritura"),
+                    () -> assertEquals(READY_PENDING, states(id), "Ambas escrituras deben revertirse"),
+                    () -> assertEquals(hex(claim.token()), storedToken(id), "Debe conservar la reserva recuperable"));
+        } finally {
+            jdbc.execute("ALTER TABLE search_request DROP CONSTRAINT " + constraint);
+        }
+    }
+
+    @Test
+    void failedRetryUpdateDoesNotReleaseOwnershipOrIncrementAttempts() {
+        UUID id = accept();
+        OutboxClaim claim = adapter.claimNext(LEASE).orElseThrow();
+        String constraint = "reject_" + hex(id).substring(0, 20);
+        jdbc.execute("ALTER TABLE search_outbox ADD CONSTRAINT " + constraint
+                + " CHECK (search_id <> HEXTORAW('" + hex(id) + "') OR retry_attempts = 0)");
+        try {
+            assertAll(
+                    () -> assertThrows(DataIntegrityViolationException.class,
+                            () -> adapter.retry(id, claim.token(), Duration.ofSeconds(1)), "Debe propagar el fallo"),
+                    () -> assertEquals(0, retryAttempts(id), "No debe dejar un contador parcial"),
+                    () -> assertEquals(hex(claim.token()), storedToken(id), "No debe perder el propietario"));
+        } finally {
+            jdbc.execute("ALTER TABLE search_outbox DROP CONSTRAINT " + constraint);
+        }
+    }
+
+    @Test
+    void serviceRecoversDeferredPublicationUsingRealPersistence() {
+        UUID id = accept();
+        int first = new PublishOutboxService(adapter, (key, payload) -> PublicationResult.RETRYABLE_FAILURE).publishBatch(100);
+        String pending = states(id);
+        expire(id);
+        List<UUID> published = new ArrayList<>();
+        int second = new PublishOutboxService(new OracleOutboxAdapter(SOURCE), (key, payload) -> {
+            published.add(new SearchEventCodec().decode(payload).searchId());
+            return PublicationResult.CONFIRMED;
+        }).publishBatch(100);
+        assertAll(
+                () -> assertEquals(0, first, "El fallo no es una publicacion"),
+                () -> assertEquals(READY_PENDING, pending, "Debe mantener trabajo recuperable"),
+                () -> assertEquals(1, second, "El siguiente ciclo debe confirmar"),
+                () -> assertEquals(List.of(id), published, "Debe publicar el evento original"),
+                () -> assertEquals("SENT/PENDING", states(id), "Publicar no significa procesar"));
+    }
+
+    private String states(UUID id) {
+        return jdbc.queryForObject("SELECT o.state || '/' || r.status FROM search_outbox o"
+                + " JOIN search_request r ON r.search_id = o.search_id WHERE o.search_id = HEXTORAW(?)",
+                String.class, hex(id));
+    }
+
+    private int retryAttempts(UUID id) {
+        return Objects.requireNonNull(jdbc.queryForObject(
+                "SELECT retry_attempts FROM search_outbox WHERE search_id = HEXTORAW(?)", Integer.class, hex(id)));
     }
 
     private UUID accept() {
