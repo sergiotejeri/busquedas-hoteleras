@@ -4,11 +4,11 @@ Servicio para registrar búsquedas hoteleras y consultar cuántas coinciden con 
 
 ## Estado
 
-Base generada con [Spring Initializr](https://start.spring.io/): Maven, Java 21 y Spring Web MVC. Incluye el modelo de criterios de búsqueda, sus pruebas unitarias y una prueba de carga del contexto. La persistencia en Oracle se prueba por integración. Todavía faltan los endpoints de negocio y Kafka.
+Base generada con [Spring Initializr](https://start.spring.io/): Maven, Java 21 y Spring Web MVC. `POST /search` valida y guarda solicitudes en Oracle. Todavía faltan el conteo y Kafka.
 
 ## Criterios de búsqueda
 
-`SearchCriteria` pertenece al dominio y solo depende de Java. Exige un hotel no nulo ni blanco, fechas no nulas con entrada anterior a salida y una lista no vacía de edades no nulas y mayores o iguales a cero. Una infracción produce `InvalidSearchException`, con código, campo y mensaje; su traducción a HTTP se incorporará con el adaptador web.
+`SearchCriteria` pertenece al dominio y solo depende de Java. Exige un hotel no nulo ni blanco, fechas no nulas con entrada anterior a salida y una lista no vacía de edades no nulas y mayores o iguales a cero. Una infracción produce `InvalidSearchException`, con código, campo y mensaje, y se devuelve como HTTP 400.
 
 El record conserva una copia inmutable de las edades. No impone fechas futuras ni un máximo de edad adicional. Como decisión de implementación, la igualdad incluye todos los campos, conserva el orden y las repeticiones de edades y no normaliza el identificador del hotel. Así, `[30, 1]` y `[1, 30]` son criterios diferentes. Esta decisión hace explícita la interpretación adoptada ante la contradicción entre el texto y el ejemplo del enunciado.
 
@@ -24,7 +24,7 @@ Estos tipos solo modelan el contrato interno. Todavía no ejecutan transiciones,
 
 `AcceptSearchService` recibe criterios ya validados, solicita un UUID al generador inyectado y entrega una `SearchSubmission` al puerto `AcceptSearchPort`. Devuelve el ID únicamente después del retorno correcto del puerto; no deduplica solicitudes iguales ni oculta excepciones. Rechaza criterios, dependencias o identificadores generados nulos.
 
-`OracleAcceptanceAdapter` guarda la solicitud y el evento pendiente en una transacción. Devuelve el control después del commit. Falta conectarlo al endpoint.
+`OracleAcceptanceAdapter` guarda la solicitud y el evento pendiente en una transacción. El endpoint responde después del commit.
 
 ## Formato de eventos y criterios almacenados
 
@@ -44,7 +44,7 @@ Se necesita Docker con contenedores Linux y acceso a Internet en la primera cons
 docker build --progress=plain -t busquedas-hoteleras .
 ```
 
-La construcción ejecuta `clean verify`, incluidas las pruebas del dominio, la prueba de arranque y los controles de calidad, y genera la imagen ejecutable. Las pruebas del dominio comprueban validaciones, igualdad y copia defensiva; la prueba de arranque inicia el contexto a través de `main` y comprueba que queda activo.
+La construcción ejecuta `clean verify`, incluidas las pruebas del dominio, HTTP y los controles de calidad. La prueba de contexto sustituye la conexión a base de datos; las pruebas de integración verifican el arranque y la persistencia con Oracle real.
 
 ## Controles de calidad
 
@@ -77,10 +77,20 @@ La prueba `DomainArchitectureTest` usa el núcleo de [ArchUnit](https://www.arch
 ## Arrancar
 
 ```shell
-docker run --rm --name busquedas-hoteleras -p 127.0.0.1:8080:8080 busquedas-hoteleras
+docker compose up -d --build app
 ```
 
-El servidor escucha en `http://localhost:8080`. La ruta `/` devuelve 404 porque aún no hay controladores. Para detenerlo, pulsa Ctrl+C.
+El primer arranque puede tardar varios minutos. El servidor escucha en `http://localhost:8080`; la ruta `/` devuelve 404. Para detener los servicios sin borrar los datos: `docker compose stop`.
+
+### Registrar una búsqueda
+
+```shell
+curl -i http://localhost:8080/search -H "Content-Type: application/json" -d '{"hotelId":"hotel-1","checkIn":"01/12/2026","checkOut":"03/12/2026","ages":[30,1]}'
+```
+
+Devuelve `202` y `{"searchId":"UUID"}` tras guardar la solicitud y el evento. Es una decisión del contrato: aceptada no significa procesada. Las fechas usan `dd/MM/yyyy`. Los datos inválidos devuelven `400` con código, campo y mensaje; el exceso de tamaño es un error global. Se rechazan campos desconocidos, duplicados y conversiones de tipos.
+
+Si no se puede obtener conexión, devuelve `503`. Una confirmación perdida puede dejar un resultado incierto; repetir el POST crea otra solicitud.
 
 ## Versiones
 
@@ -104,7 +114,7 @@ El primer arranque puede tardar varios minutos. Reconstruye el ejecutor cuando c
 
 Flyway 13.10.3 crea las tablas de solicitudes y outbox mediante `V1__initial_schema.sql`. Las pruebas comprueban la conexión, la migración repetible, las restricciones y el rollback conjunto. Flyway `clean` está desactivado. Las dependencias se descargan de Maven Central; se deshabilita el repositorio autenticado adicional declarado por Flyway.
 
-Por ahora, la conexión y las migraciones se configuran desde las pruebas. La configuración del adaptador en Spring y el endpoint se añadirán en el siguiente paso.
+La aplicación configura la conexión desde Compose y aplica Flyway al arrancar. Las pruebas usan su propio usuario.
 
 Para detener Oracle conservando los datos:
 

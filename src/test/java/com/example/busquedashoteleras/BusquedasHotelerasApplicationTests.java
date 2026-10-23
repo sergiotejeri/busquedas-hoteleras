@@ -6,9 +6,13 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import javax.sql.DataSource;
 
-@SpringBootTest(useMainMethod = SpringBootTest.UseMainMethod.ALWAYS)
+@SpringBootTest(useMainMethod = SpringBootTest.UseMainMethod.ALWAYS, properties = "spring.flyway.enabled=false")
 class BusquedasHotelerasApplicationTests {
+    @MockitoBean
+    private DataSource dataSource;
 
 	@Test
 	void startsApplicationContext(@Autowired ConfigurableApplicationContext context) {

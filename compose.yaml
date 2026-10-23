@@ -1,5 +1,17 @@
 name: busquedas-hoteleras
 services:
+  app:
+    build: .
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:oracle:thin:@//oracle:1521/FREEPDB1
+      SPRING_DATASOURCE_USERNAME: search_app
+      SPRING_DATASOURCE_PASSWORD: LocalOnly_App_2026
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+    depends_on:
+      oracle:
+        condition: service_healthy
+    networks: [backend, dependencies]
   oracle:
     image: container-registry.oracle.com/database/free@sha256:cf540c3fa190d7cffad08c491652ac07fc70314e510f6b87890449517d565e94
     environment:
