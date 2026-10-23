@@ -1,108 +1,49 @@
 # Búsquedas hoteleras
 
-Servicio para registrar búsquedas hoteleras y consultar cuántas coinciden con sus criterios.
+Servicio de búsquedas hoteleras creado con [Spring Initializr](https://start.spring.io/). Por ahora, `POST /search` valida y guarda solicitudes en Oracle. El conteo, Kafka y Swagger/OpenAPI están pendientes.
 
-## Estado
+## Arranque
 
-Base generada con [Spring Initializr](https://start.spring.io/): Maven, Java 21 y Spring Web MVC. `POST /search` valida y guarda solicitudes en Oracle. Todavía faltan el conteo y Kafka.
-
-## Criterios de búsqueda
-
-`SearchCriteria` pertenece al dominio y solo depende de Java. Exige un hotel no nulo ni blanco, fechas no nulas con entrada anterior a salida y una lista no vacía de edades no nulas y mayores o iguales a cero. Una infracción produce `InvalidSearchException`, con código, campo y mensaje, y se devuelve como HTTP 400.
-
-El record conserva una copia inmutable de las edades. No impone fechas futuras ni un máximo de edad adicional. Como decisión de implementación, la igualdad incluye todos los campos, conserva el orden y las repeticiones de edades y no normaliza el identificador del hotel. Así, `[30, 1]` y `[1, 30]` son criterios diferentes. Esta decisión hace explícita la interpretación adoptada ante la contradicción entre el texto y el ejemplo del enunciado.
-
-## Solicitudes y resultados
-
-`SearchSubmission` une un UUID obligatorio con los criterios validados. Recibe el identificador; su generación por solicitud corresponde al caso de uso de aceptación.
-
-`SearchStatus` distingue `PENDING`, `PROCESSED` y `FAILED`. `CountResult` exige identificador y estado. Un resultado procesado incluye criterios y un conteo positivo (la propia búsqueda cuenta). Un resultado pendiente o fallido no expone criterios ni conteo: ausencia de resultado no equivale a cero. Estas invariantes se comprueban al construir los objetos.
-
-Estos tipos solo modelan el contrato interno. Todavía no ejecutan transiciones, consultas ni procesamiento asíncrono, y no determinan por sí solos una respuesta HTTP.
-
-## Aceptación de solicitudes
-
-`AcceptSearchService` recibe criterios ya validados, solicita un UUID al generador inyectado y entrega una `SearchSubmission` al puerto `AcceptSearchPort`. Devuelve el ID únicamente después del retorno correcto del puerto; no deduplica solicitudes iguales ni oculta excepciones. Rechaza criterios, dependencias o identificadores generados nulos.
-
-`OracleAcceptanceAdapter` guarda la solicitud y el evento pendiente en una transacción. El endpoint responde después del commit.
-
-## Formato de eventos y criterios almacenados
-
-`infrastructure.serialization` contiene los codecs JSON, sin filtrar dependencias de Jackson al dominio ni a la aplicación. Se reutiliza Jackson incluido en Spring Boot, con configuración propia para este contrato interno.
-
-El evento v1 contiene `schemaVersion`, `searchId`, `hotelId`, `checkIn`, `checkOut` y `ages`. Se escribe en UTF-8, con fechas `dd/MM/uuuu` y orden de propiedades explícito. La lectura exige campos completos, tipos correctos, fechas reales y criterios válidos. Rechaza propiedades desconocidas o duplicadas, documentos concatenados y conversiones implícitas de cadenas o decimales a edades. Una versión desconocida produce `UNSUPPORTED_SCHEMA`; un contenido inválido, `INVALID_EVENT`, sin incluir el payload en el mensaje.
-
-`CanonicalCriteriaCodec` representa únicamente los criterios con fechas ISO (`uuuu-MM-dd`) y orden de propiedades explícito. Conserva hotel, orden y repeticiones de edades, sin incorporar el ID ni la versión del evento. Esta es una representación interna determinista, no una implementación de un estándar general de JSON canónico. Un contenido almacenado inválido produce un error de estado.
-
-Estos contratos son decisiones técnicas del proyecto. Todavía no hay productor ni consumidor de Kafka. La validación del formato no detecta una alteración que siga siendo válida: comprobar la coincidencia con la solicitud aceptada corresponderá al procesamiento. El límite de tamaño se comprueba al aceptar; la agrupación se incorporará con el procesamiento.
-
-## Construir y comprobar
-
-Se necesita Docker con contenedores Linux y acceso a Internet en la primera construcción. No es necesario instalar Java ni Maven en el equipo.
-
-```shell
-docker build --progress=plain -t busquedas-hoteleras .
-```
-
-La construcción ejecuta `clean verify`, incluidas las pruebas del dominio, HTTP y los controles de calidad. La prueba de contexto sustituye la conexión a base de datos; las pruebas de integración verifican el arranque y la persistencia con Oracle real.
-
-## Controles de calidad
-
-Los controles forman parte de `verify`: un incumplimiento hace fallar la construcción.
-
-| Control | Alcance |
-| --- | --- |
-| ArchUnit 1.5.1 | Dependencias del dominio y de la aplicación sobre clases de producción; rechaza frameworks, otras capas y JDBC, y falla si no encuentra clases de dominio. |
-| PMD 7.28.0 | Reglas de errores, buenas prácticas y rendimiento en producción y tests; reglas de diseño adicionales en producción. Prioridades 1–5. |
-| SpotBugs 4.10.5 | Bytecode de producción y tests, esfuerzo máximo y umbral de confianza bajo. |
-| CPD 7.28.0 | Bloques Java duplicados de al menos 100 tokens, ignorando anotaciones. |
-| JaCoCo 0.8.15 | Mínimo del 85 % en líneas, ramas, métodos e instrucciones, sin excluir clases. |
-
-Las instrucciones de JaCoCo son instrucciones de bytecode, no sentencias Java. Si no existen ramas, su cobertura no es una comprobación de decisiones de negocio. Un porcentaje alto en esta base mínima no demuestra cobertura del ejercicio completo.
-
-Para exportar los informes sin instalar Maven:
-
-```shell
-docker build --target reports --output type=local,dest=target/quality .
-```
-
-Abre `target/quality/jacoco/index.html` para consultar cobertura. En la misma carpeta están los informes XML de los análisis y los resultados de las pruebas. `target/` está excluido de Git.
-
-PMD se ejecuta en un proceso separado con el classpath del proyecto y del JDK para resolver los tipos. Las reglas están en `config/`. Se excluyen dos reglas de diseño obsoletas y `LoosePackageCoupling`, que requiere una política de paquetes; la independencia del dominio y de la aplicación ya se comprueba con ArchUnit; las reglas se ampliarán al introducir infraestructura. JaCoCo no tiene exclusiones. SpotBugs tiene una supresión local documentada en la preparación de mocks JDBC: esa configuración no abre recursos ni ejecuta SQL.
-
-Mockito se carga como agente al iniciar la JVM de pruebas, conservando también el agente JaCoCo. La opción `-Xshare:off` se aplica solo a esas JVM porque la instrumentación de Mockito limita el uso de CDS. La imagen de ejecución no incorpora estos agentes ni esa opción.
-
-La prueba `DomainArchitectureTest` usa el núcleo de [ArchUnit](https://www.archunit.org/userguide/html/000_Index.html) con JUnit, sin añadir otro motor de pruebas. ArchUnit tiene alcance `test` y no forma parte de la aplicación ejecutable. Las reglas admiten dependencias del dominio hacia Java y el propio dominio, y de aplicación hacia Java, dominio y aplicación, excepto JDBC; analiza bytecode y no certifica por sí sola que cada responsabilidad esté en la capa correcta.
-
-## Arrancar
+Necesitas Docker con Compose y contenedores Linux. La compilación se hace dentro de Docker; no hace falta instalar Java ni Maven. La primera construcción necesita acceso a Internet.
 
 ```shell
 docker compose up -d --build app
 ```
 
-El primer arranque puede tardar varios minutos. El servidor escucha en `http://localhost:8080`; la ruta `/` devuelve 404. Para detener los servicios sin borrar los datos: `docker compose stop`.
+El primer arranque puede tardar varios minutos. La aplicación escucha en `http://localhost:8080`; la ruta `/` devuelve 404. Para detener los servicios conservando los datos:
 
-### Registrar una búsqueda
+```shell
+docker compose stop
+```
+
+## Registrar una búsqueda
 
 ```shell
 curl -i http://localhost:8080/search -H "Content-Type: application/json" -d '{"hotelId":"hotel-1","checkIn":"01/12/2026","checkOut":"03/12/2026","ages":[30,1]}'
 ```
 
-Devuelve `202` y `{"searchId":"UUID"}` tras guardar la solicitud y el evento. Es una decisión del contrato: aceptada no significa procesada. Las fechas usan `dd/MM/yyyy`. Los datos inválidos devuelven `400` con código, campo y mensaje; el exceso de tamaño es un error global. Se rechazan campos desconocidos, duplicados y conversiones de tipos.
+Devuelve `202` con `{"searchId":"UUID"}` después de guardar la solicitud y su evento pendiente en una misma transacción. Cada solicitud recibe un ID distinto, aunque sus criterios coincidan. El `202` es una decisión del contrato: la búsqueda está aceptada, todavía no procesada.
 
-Si no se puede obtener conexión, devuelve `503`. Una confirmación perdida puede dejar un resultado incierto; repetir el POST crea otra solicitud.
+El hotel no puede estar vacío, la entrada debe ser anterior a la salida y las edades deben ser enteros no negativos en una lista no vacía. Todos los campos son obligatorios y las fechas usan `dd/MM/yyyy`. Se rechazan propiedades desconocidas, duplicadas y conversiones implícitas de tipos.
 
-## Versiones
+Los datos inválidos devuelven `400` con código, campo y mensaje. El evento serializado admite hasta 262.144 bytes UTF-8; superar ese límite produce un error global. Si no se puede obtener conexión, devuelve `503`. Una confirmación perdida puede dejar un resultado incierto: repetir el POST crea otra solicitud.
 
-- Spring Boot 4.1.1 y Java 21 como nivel de compilación.
-- Maven 3.10.0, fijado por el wrapper generado.
-- JDK/JRE 25 en las imágenes Docker, fijadas por digest.
+## Decisiones de diseño
 
-El POM descargado indicaba `4.1.1.RELEASE`; se ajustó a `4.1.1`, el identificador disponible en Maven Central.
+- Arquitectura hexagonal: dominio independiente de frameworks, aplicación dependiente del dominio y adaptadores en infraestructura. Los objetos del dominio son inmutables.
+- La igualdad conserva el identificador del hotel, las fechas y el orden y las repeticiones de edades. `[30, 1]` y `[1, 30]` son distintos. Es la interpretación adoptada ante la contradicción entre el texto y el ejemplo del enunciado.
+- La solicitud y el evento se guardan juntos en Oracle. El evento tiene un contrato JSON versionado; los criterios almacenados usan fechas ISO y una representación determinista.
+- La outbox permite reservar un evento con caducidad y un token nuevo. Una reserva vencida se puede recuperar; un token antiguo no puede confirmarla. La publicación automática se incorporará después.
 
-## Oracle y pruebas de integración
+## Pruebas y calidad
 
-Compose arranca Oracle Database Free 23.26.3.0 Lite con usuarios separados para aplicación y pruebas. Las contraseñas son de desarrollo local y Oracle no expone puertos al exterior. Cada usuario tiene una cuota de 256 MB en `SEARCH_DATA`, cuyo tamaño máximo es 1 GB.
+Para compilar y ejecutar las pruebas habituales y los controles:
+
+```shell
+docker build --progress=plain -t busquedas-hoteleras .
+```
+
+Para ejecutar también las pruebas con Oracle real:
 
 ```shell
 docker compose --profile test build integration-test
@@ -110,22 +51,22 @@ docker compose up -d --wait oracle
 docker compose --profile test run --rm integration-test
 ```
 
-El primer arranque puede tardar varios minutos. Reconstruye el ejecutor cuando cambie el código. El perfil `integration` ejecuta las pruebas con Oracle real, además de las pruebas habituales y los controles de calidad. Los informes se guardan en `test-results/`, excluido de Git: `failsafe-reports/` para integración y `site/jacoco/` para cobertura.
+Reconstruye el ejecutor cuando cambie el código. Los informes quedan en `test-results/`: `failsafe-reports/` para integración y `site/jacoco/index.html` para cobertura.
 
-Flyway 13.10.3 crea las tablas de solicitudes y outbox mediante `V1__initial_schema.sql`. Las pruebas comprueban la conexión, la migración repetible, las restricciones y el rollback conjunto. Flyway `clean` está desactivado. Las dependencias se descargan de Maven Central; se deshabilita el repositorio autenticado adicional declarado por Flyway.
+`verify` incluye ArchUnit, PMD, SpotBugs, CPD y JaCoCo. Comprueba dependencias entre capas, posibles errores y duplicación, y exige un 85 % de cobertura en líneas, ramas, métodos e instrucciones de bytecode, sin excluir clases. Un incumplimiento hace fallar la construcción. Las reglas están en `config/` y en el POM.
 
-La aplicación configura la conexión desde Compose y aplica Flyway al arrancar. Las pruebas usan su propio usuario.
-
-Para detener Oracle conservando los datos:
+Para exportar los informes de la construcción:
 
 ```shell
-docker compose stop oracle
+docker build --target reports --output type=local,dest=target/quality .
 ```
 
-El volumen `oracle-data` conserva el esquema entre arranques. Los cambios posteriores se añadirán en nuevas migraciones, sin modificar las ya aplicadas.
+La cobertura se consulta en `target/quality/jacoco/index.html`. Tanto `target/` como `test-results/` están excluidos de Git.
 
-## Guardado de solicitudes
+## Entorno
 
-La solicitud y su evento pendiente se guardan juntos en Oracle. Si falla una escritura, se deshacen ambas. Los IDs repetidos no sobrescriben datos.
+Java 21, Spring Boot 4.1.1 y Maven 3.10.0. Las imágenes usan JDK/JRE 25 y Oracle Database Free 23.26.3.0 Lite, fijados por digest.
 
-El evento puede ocupar hasta 262.144 bytes UTF-8. Si supera ese límite, se rechaza antes de guardar nada. Las pruebas cubren estos casos con Oracle real.
+Compose separa los usuarios de aplicación y pruebas. Las contraseñas son de desarrollo local y Oracle no publica puertos. El volumen `oracle-data` conserva los datos entre arranques.
+
+Flyway aplica las migraciones al iniciar: V1 crea las tablas y V2 añade las reservas de outbox. `clean` está desactivado; los cambios de esquema se añaden mediante nuevas migraciones.
