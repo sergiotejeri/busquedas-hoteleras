@@ -25,7 +25,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import tools.jackson.databind.json.JsonMapper;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = "app.outbox.enabled=false")
 class SearchHttpIT {
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final String BODY = "{\"hotelId\":\"http-hotel\",\"checkIn\":\"01/01/2024\","

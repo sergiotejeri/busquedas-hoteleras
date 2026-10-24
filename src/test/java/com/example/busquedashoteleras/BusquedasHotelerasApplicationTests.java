@@ -9,7 +9,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import javax.sql.DataSource;
 
-@SpringBootTest(useMainMethod = SpringBootTest.UseMainMethod.ALWAYS, properties = "spring.flyway.enabled=false")
+@SpringBootTest(useMainMethod = SpringBootTest.UseMainMethod.ALWAYS, properties = {"spring.flyway.enabled=false", "app.outbox.enabled=false"})
 class BusquedasHotelerasApplicationTests {
     @MockitoBean
     private DataSource dataSource;
