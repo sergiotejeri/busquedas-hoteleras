@@ -1,13 +1,13 @@
 # Búsquedas hoteleras
 
-Servicio de búsquedas hoteleras creado con [Spring Initializr](https://start.spring.io/). Por ahora, `POST /search` valida y guarda solicitudes en Oracle. El conteo, Kafka y Swagger/OpenAPI están pendientes.
+Servicio de búsquedas hoteleras creado con [Spring Initializr](https://start.spring.io/). `POST /search` valida y guarda solicitudes en Oracle.
 
 ## Arranque
 
 Necesitas Docker con Compose y contenedores Linux. La compilación se hace dentro de Docker; no hace falta instalar Java ni Maven. La primera construcción necesita acceso a Internet.
 
 ```shell
-docker compose up -d --build app
+docker compose up -d --build app topic-init
 ```
 
 El primer arranque puede tardar varios minutos. La aplicación escucha en `http://localhost:8080`; la ruta `/` devuelve 404. Para detener los servicios conservando los datos:
@@ -33,7 +33,8 @@ Los datos inválidos devuelven `400` con código, campo y mensaje. El evento ser
 - Arquitectura hexagonal: dominio independiente de frameworks, aplicación dependiente del dominio y adaptadores en infraestructura. Los objetos del dominio son inmutables.
 - La igualdad conserva el identificador del hotel, las fechas y el orden y las repeticiones de edades. `[30, 1]` y `[1, 30]` son distintos. Es la interpretación adoptada ante la contradicción entre el texto y el ejemplo del enunciado.
 - La solicitud y el evento se guardan juntos en Oracle. El evento tiene un contrato JSON versionado; los criterios almacenados usan fechas ISO y una representación determinista.
-- La outbox reserva los eventos de uno en uno y confirma solo con el token vigente. El servicio admite hasta 100 por ciclo; ante un fallo transitorio aplaza el evento entre 1 y 30 segundos y detiene el ciclo. Un rechazo permanente se guarda sin degradar búsquedas ya procesadas. Kafka y el envío automático se incorporarán después.
+- La outbox reserva los eventos de uno en uno y confirma solo con el token vigente. El servicio admite hasta 100 por ciclo; ante un fallo transitorio aplaza el evento entre 1 y 30 segundos y detiene el ciclo. Un rechazo permanente se guarda sin degradar búsquedas ya procesadas.
+- El productor envía el JSON original a `hotel_availability_searches`, con el ID como clave, y espera la confirmación de Kafka. Un timeout deja el envío recuperable: puede haberse recibido y volver a entregarse.
 
 ## Pruebas y calidad
 
@@ -43,11 +44,11 @@ Para compilar y ejecutar las pruebas habituales y los controles:
 docker build --progress=plain -t busquedas-hoteleras .
 ```
 
-Para ejecutar también las pruebas con Oracle real:
+Para ejecutar también las pruebas con Oracle y Kafka reales:
 
 ```shell
 docker compose --profile test build integration-test
-docker compose up -d --wait oracle
+docker compose up -d --wait oracle kafka
 docker compose --profile test run --rm integration-test
 ```
 
@@ -66,6 +67,8 @@ La cobertura se consulta en `target/quality/jacoco/index.html`. Tanto `target/` 
 ## Entorno
 
 Java 21, Spring Boot 4.1.1 y Maven 3.10.0. Las imágenes usan JDK/JRE 25 y Oracle Database Free 23.26.3.0 Lite, fijados por digest.
+
+Kafka y su cliente usan 4.4.0. El broker local tiene tres particiones y una réplica; conserva sus datos en `kafka-data` y no publica puertos. La imagen está fijada por digest y el topic se crea al arrancar `topic-init`.
 
 Compose separa los usuarios de aplicación y pruebas. Las contraseñas son de desarrollo local y Oracle no publica puertos. El volumen `oracle-data` conserva los datos entre arranques.
 

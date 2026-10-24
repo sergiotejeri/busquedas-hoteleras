@@ -27,6 +27,52 @@ services:
       retries: 60
       start_period: 90s
     networks: [backend]
+  kafka-volume-init:
+    image: apache/kafka@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["chown 1000:1000 /var/lib/kafka/data"]
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    network_mode: none
+    restart: "no"
+  kafka:
+    image: apache/kafka@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f
+    depends_on:
+      kafka-volume-init:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+    volumes:
+      - kafka-data:/tmp/kraft-combined-logs
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+    networks: [backend]
+  topic-init:
+    image: apache/kafka@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/opt/kafka/bin/kafka-topics.sh"]
+    command: ["--create", "--if-not-exists", "--topic", "hotel_availability_searches", "--partitions", "3", "--replication-factor", "1", "--bootstrap-server", "kafka:9092"]
+    restart: "no"
+    networks: [backend]
   integration-test:
     profiles: [test]
     build:
@@ -36,14 +82,18 @@ services:
       TEST_DB_URL: jdbc:oracle:thin:@//oracle:1521/FREEPDB1
       TEST_DB_USER: search_it
       TEST_DB_PASSWORD: LocalOnly_IT_2026
+      TEST_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     volumes:
       - ./test-results:/reports
     depends_on:
       oracle:
         condition: service_healthy
+      topic-init:
+        condition: service_completed_successfully
     networks: [backend, dependencies]
 volumes:
   oracle-data:
+  kafka-data:
 networks:
   backend:
     internal: true

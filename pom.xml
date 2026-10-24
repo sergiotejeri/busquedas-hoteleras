@@ -27,6 +27,7 @@
     </scm>
     <properties>
         <java.version>21</java.version>
+        <kafka.version>4.4.0</kafka.version>
         <flyway.version>13.10.3</flyway.version>
         <archunit.version>1.5.1</archunit.version>
         <jacoco.version>0.8.15</jacoco.version>
@@ -38,6 +39,10 @@
         <argLine />
     </properties>
     <dependencies>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+        </dependency>
         <dependency>
             <groupId>com.github.spotbugs</groupId>
             <artifactId>spotbugs-annotations</artifactId>
