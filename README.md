@@ -34,6 +34,7 @@ Los datos inválidos devuelven `400` con código, campo y mensaje. El evento ser
 - La igualdad conserva el identificador del hotel, las fechas y el orden y las repeticiones de edades. `[30, 1]` y `[1, 30]` son distintos. Es la interpretación adoptada ante la contradicción entre el texto y el ejemplo del enunciado.
 - Los grupos se buscan por hash y se comparan por su contenido completo, conservando el orden de las edades.
 - El procesamiento guarda la búsqueda y su estado en una transacción. Repetir el mismo evento no duplica la búsqueda; los criterios deben coincidir con la solicitud aceptada.
+- El conteo obtiene el estado, los criterios y el total en una sola consulta a Oracle. Solo cuenta búsquedas procesadas del mismo grupo.
 - La solicitud y el evento se guardan juntos en Oracle. El evento tiene un contrato JSON versionado; los criterios almacenados usan fechas ISO y una representación determinista.
 - La outbox reserva los eventos de uno en uno y confirma solo con el token vigente. El servicio admite hasta 100 por ciclo; ante un fallo transitorio aplaza el evento entre 1 y 30 segundos y detiene el ciclo. Un rechazo permanente se guarda sin degradar búsquedas ya procesadas.
 - El productor envía el JSON original a `hotel_availability_searches`, con el ID como clave, y espera la confirmación de Kafka. Un timeout deja el envío recuperable: puede haberse recibido y volver a entregarse.
