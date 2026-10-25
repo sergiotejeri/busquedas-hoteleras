@@ -28,6 +28,16 @@ El hotel no puede estar vacío, la entrada debe ser anterior a la salida y las e
 
 Los datos inválidos devuelven `400` con código, campo y mensaje. El evento serializado admite hasta 262.144 bytes UTF-8; superar ese límite produce un error global. Si no se puede obtener conexión, devuelve `503`. Una confirmación perdida puede dejar un resultado incierto: repetir el POST crea otra solicitud.
 
+## Consultar el conteo
+
+```shell
+curl -i "http://localhost:8080/count?searchId=UUID"
+```
+
+Usa el ID devuelto por POST. Devuelve `200` con `searchId`, `search` y `count`; `202` si sigue pendiente, `404` si no existe y `503` ante fallo de procesamiento o almacenamiento. El `202` pendiente y `Retry-After: 1` son decisiones del contrato; no garantizan cuándo terminará. Se exige un único UUID canónico en minúsculas, sin parámetros adicionales; un error devuelve `400`.
+
+Swagger: `http://localhost:8080/swagger-ui.html`. OpenAPI: `http://localhost:8080/v3/api-docs`.
+
 ## Decisiones de diseño
 
 - Arquitectura hexagonal: dominio independiente de frameworks, aplicación dependiente del dominio y adaptadores en infraestructura. Los objetos del dominio son inmutables.

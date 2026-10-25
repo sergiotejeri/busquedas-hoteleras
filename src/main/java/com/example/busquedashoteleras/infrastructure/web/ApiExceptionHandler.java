@@ -2,6 +2,7 @@ package com.example.busquedashoteleras.infrastructure.web;
 
 import com.example.busquedashoteleras.domain.InvalidSearchException;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.RecoverableDataAccessException;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -24,7 +25,7 @@ public final class ApiExceptionHandler {
     }
 
     @ExceptionHandler({CannotCreateTransactionException.class, DataAccessResourceFailureException.class,
-            TransientDataAccessException.class})
+            TransientDataAccessException.class, RecoverableDataAccessException.class})
     public ResponseEntity<ApiError> storageUnavailable() {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(new ApiError("STORAGE_UNAVAILABLE", null,
                 "Search could not be confirmed. Try again later."));

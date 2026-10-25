@@ -29,7 +29,7 @@ import org.springframework.transaction.CannotCreateTransactionException;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
-@WebMvcTest
+@WebMvcTest(SearchController.class)
 @Import({SearchHttpTest.UseCase.class, JsonInputConfiguration.class})
 class SearchHttpTest {
     private static final String SEARCH_PATH = "/search";

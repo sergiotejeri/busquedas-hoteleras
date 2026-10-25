@@ -2,6 +2,8 @@ package com.example.busquedashoteleras.infrastructure.web;
 
 import com.example.busquedashoteleras.domain.InvalidSearchException;
 import com.example.busquedashoteleras.domain.SearchCriteria;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.media.ArraySchema;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -11,7 +13,14 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
-public record SearchRequest(String hotelId, String checkIn, String checkOut, List<Integer> ages) {
+public record SearchRequest(
+        @Schema(requiredMode = Schema.RequiredMode.REQUIRED, minLength = 1) String hotelId,
+        @Schema(requiredMode = Schema.RequiredMode.REQUIRED, example = "01/12/2026",
+                pattern = "^[0-9]{2}/[0-9]{2}/[0-9]{4}$") String checkIn,
+        @Schema(requiredMode = Schema.RequiredMode.REQUIRED, example = "03/12/2026",
+                pattern = "^[0-9]{2}/[0-9]{2}/[0-9]{4}$") String checkOut,
+        @Schema(requiredMode = Schema.RequiredMode.REQUIRED)
+        @ArraySchema(minItems = 1, schema = @Schema(type = "integer", minimum = "0")) List<Integer> ages) {
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd/MM/uuuu", Locale.ROOT)
             .withResolverStyle(ResolverStyle.STRICT);
 

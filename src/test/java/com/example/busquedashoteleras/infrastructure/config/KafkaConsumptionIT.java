@@ -3,6 +3,8 @@ package com.example.busquedashoteleras.infrastructure.config;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.example.busquedashoteleras.BusquedasHotelerasApplication;
@@ -16,6 +18,11 @@ import com.example.busquedashoteleras.infrastructure.kafka.VirtualPersistenceExe
 import com.example.busquedashoteleras.infrastructure.oracle.OracleAcceptanceAdapter;
 import com.example.busquedashoteleras.infrastructure.serialization.SearchEventCodec;
 import java.nio.charset.StandardCharsets;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -46,9 +53,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.kafka.listener.ConcurrentMessageListenerContainer;
+import tools.jackson.databind.json.JsonMapper;
 
 class KafkaConsumptionIT {
     private static final String TOPIC = KafkaSearchPublisher.TOPIC;
@@ -108,14 +117,7 @@ class KafkaConsumptionIT {
 
     @Test
     void applicationWiringProcessesDuplicatesOnce() throws InterruptedException, ExecutionException, TimeoutException {
-        try (var context = new SpringApplicationBuilder(BusquedasHotelerasApplication.class)
-                .web(WebApplicationType.NONE).run(
-                        "--spring.datasource.url=" + required("TEST_DB_URL"),
-                        "--spring.datasource.username=" + required("TEST_DB_USER"),
-                        "--spring.datasource.password=" + required("TEST_DB_PASSWORD"),
-                        "--app.kafka.bootstrap-servers=" + SERVERS,
-                        "--app.kafka.consumer-group=" + group,
-                        "--app.outbox.enabled=false")) {
+        try (var context = application(false)) {
             SearchSubmission search = accept();
             send(search);
             RecordMetadata duplicate = send(search);
@@ -125,6 +127,79 @@ class KafkaConsumptionIT {
                     () -> assertEquals(PROCESSED, state(search), "Actualiza el estado"),
                     () -> assertEquals(1, projectionCount(search), "La reentrega no duplica la proyeccion"));
         }
+    }
+
+    @Test
+    void twoEqualHttpRequestsConvergeToCountTwoThroughKafka() throws IOException, InterruptedException {
+        try (var context = application(true); var client = HttpClient.newHttpClient()) {
+            String base = "http://localhost:" + context.getEnvironment().getRequiredProperty("local.server.port");
+            UUID first = submitHttp(client, base);
+            UUID second = submitHttp(client, base);
+            await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertAll(
+                    () -> assertNotEquals(first, second, "POST iguales reciben identificadores distintos"),
+                    () -> checkHttpCount(client, base, first),
+                    () -> checkHttpCount(client, base, second)));
+        }
+    }
+
+    private ConfigurableApplicationContext application(boolean publish) {
+        if (publish) {
+            requireEmptyQueue();
+        }
+        return new SpringApplicationBuilder(BusquedasHotelerasApplication.class).web(WebApplicationType.SERVLET).run(
+                "--server.port=0",
+                "--spring.datasource.url=" + required("TEST_DB_URL"),
+                "--spring.datasource.username=" + required("TEST_DB_USER"),
+                "--spring.datasource.password=" + required("TEST_DB_PASSWORD"),
+                "--app.kafka.bootstrap-servers=" + SERVERS,
+                "--app.kafka.consumer-group=" + group,
+                "--app.outbox.enabled=" + publish);
+    }
+
+    @Test
+    void refusesPublisherStartupWhenPreviousWorkExists() {
+        requireEmptyQueue();
+        SearchSubmission search = accept();
+        assertAll(
+                () -> assertThrows(IllegalStateException.class, () -> {
+                    try (var unexpected = application(true)) {
+                        throw new AssertionError("Publisher should not start: " + unexpected.isActive());
+                    }
+                }, "Debe conservar el trabajo previo sin arrancar el publicador"),
+                () -> assertEquals("READY", jdbc.queryForObject(
+                        "SELECT state FROM search_outbox WHERE search_id = HEXTORAW(?)", String.class, hex(search)),
+                        "No modifica ni publica trabajo previo"));
+    }
+
+    private void requireEmptyQueue() {
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM search_outbox WHERE state = 'READY'", Integer.class);
+        if (!Integer.valueOf(0).equals(count)) {
+            throw new IllegalStateException("El esquema de pruebas contiene trabajo previo; no se publica automaticamente");
+        }
+    }
+
+    private UUID submitHttp(HttpClient client, String base) throws IOException, InterruptedException {
+        String body = "{\"hotelId\":\"" + hotel + "\",\"checkIn\":\"01/12/2026\",\"checkOut\":\"03/12/2026\",\"ages\":[30,1]}";
+        var response = client.send(HttpRequest.newBuilder(URI.create(base + "/search"))
+                .timeout(Duration.ofSeconds(5)).header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
+        assertEquals(202, response.statusCode(), response.body());
+        UUID id = UUID.fromString(JsonMapper.builder().build().readTree(response.body()).get("searchId").asString());
+        searches.add(new SearchSubmission(id, new SearchCriteria(hotel,
+                LocalDate.of(2026, 12, 1), LocalDate.of(2026, 12, 3), List.of(30, 1))));
+        return id;
+    }
+
+    private void checkHttpCount(HttpClient client, String base, UUID id) throws IOException, InterruptedException {
+        var response = client.send(HttpRequest.newBuilder(URI.create(base + "/count?searchId=" + id))
+                .timeout(Duration.ofSeconds(5)).GET().build(), HttpResponse.BodyHandlers.ofString());
+        var body = JsonMapper.builder().build().readTree(response.body());
+        assertAll(
+                () -> assertEquals(200, response.statusCode(), "El consumidor debe terminar el procesamiento"),
+                () -> assertEquals(id.toString(), body.path("searchId").asString(), "Devuelve el ID consultado"),
+                () -> assertEquals(2L, body.path("count").asLong(), "Cuenta ambas solicitudes, incluida la propia"),
+                () -> assertEquals(hotel, body.at("/search/hotelId").asString(), "Conserva el hotel"),
+                () -> assertEquals("[30,1]", body.at("/search/ages").toString(), "Conserva orden y edades"));
     }
 
     @Test
