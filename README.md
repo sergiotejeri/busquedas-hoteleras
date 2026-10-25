@@ -38,6 +38,8 @@ Usa el ID devuelto por POST. Devuelve `200` con `searchId`, `search` y `count`; 
 
 Swagger: `http://localhost:8080/swagger-ui.html`. OpenAPI: `http://localhost:8080/v3/api-docs`.
 
+Salud: `/actuator/health/liveness` comprueba el proceso y `/actuator/health/readiness` añade Oracle. Si Oracle falla, readiness devuelve `503`; Kafka puede recuperarse mediante la outbox. No se exponen detalles internos. La conexión al pool y la negociación con Oracle tienen límites de 3 s; el apagado dispone de 45 s por fase y Docker espera hasta 60 s.
+
 ## Decisiones de diseño
 
 - Arquitectura hexagonal: dominio independiente de frameworks, aplicación dependiente del dominio y adaptadores en infraestructura. Los objetos del dominio son inmutables.

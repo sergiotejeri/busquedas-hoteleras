@@ -2,6 +2,7 @@ name: busquedas-hoteleras
 services:
   app:
     build: .
+    stop_grace_period: 60s
     environment:
       SPRING_DATASOURCE_URL: jdbc:oracle:thin:@//oracle:1521/FREEPDB1
       SPRING_DATASOURCE_USERNAME: search_app
