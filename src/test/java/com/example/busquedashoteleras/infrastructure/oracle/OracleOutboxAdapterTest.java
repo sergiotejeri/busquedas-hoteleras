@@ -133,6 +133,40 @@ class OracleOutboxAdapterTest {
     }
 
     @ParameterizedTest
+    @ValueSource(ints = {-1, 0, 101, Integer.MAX_VALUE})
+    void rejectsUnboundedRecoveryBeforeOpeningConnection(int limit) {
+        DataSource source = mock(DataSource.class);
+        assertAll(
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> new OracleOutboxAdapter(source).recoverPending(limit, Duration.ofMinutes(5))),
+                () -> verifyNoInteractions(source));
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidRecoveryAges")
+    void rejectsInvalidRecoveryAgeBeforeOpeningConnection(Duration age) {
+        DataSource source = mock(DataSource.class);
+        assertAll(
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> new OracleOutboxAdapter(source).recoverPending(1, age)),
+                () -> verifyNoInteractions(source));
+    }
+
+    @ParameterizedTest
+    @NullSource
+    void requiresRecoveryAge(Duration missing) {
+        DataSource source = mock(DataSource.class);
+        assertAll(
+                () -> assertThrows(NullPointerException.class,
+                        () -> new OracleOutboxAdapter(source).recoverPending(1, missing)),
+                () -> verifyNoInteractions(source));
+    }
+
+    private static Stream<Duration> invalidRecoveryAges() {
+        return Stream.of(Duration.ZERO, Duration.ofNanos(-1), Duration.ofDays(1).plusNanos(1));
+    }
+
+    @ParameterizedTest
     @MethodSource("invalidRetryDelays")
     void rejectsInvalidRetryWithoutOpeningConnection(Duration delay) {
         DataSource source = mock(DataSource.class);

@@ -10,12 +10,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.example.busquedashoteleras.BusquedasHotelerasApplication;
 import com.example.busquedashoteleras.application.port.FailurePort;
 import com.example.busquedashoteleras.application.port.ProcessSearchPort;
+import com.example.busquedashoteleras.application.service.PublishOutboxService;
 import com.example.busquedashoteleras.domain.SearchCriteria;
 import com.example.busquedashoteleras.domain.SearchSubmission;
 import com.example.busquedashoteleras.infrastructure.kafka.KafkaProducerSettings;
 import com.example.busquedashoteleras.infrastructure.kafka.KafkaSearchPublisher;
 import com.example.busquedashoteleras.infrastructure.kafka.VirtualPersistenceExecutor;
 import com.example.busquedashoteleras.infrastructure.oracle.OracleAcceptanceAdapter;
+import com.example.busquedashoteleras.infrastructure.oracle.OracleOutboxAdapter;
 import com.example.busquedashoteleras.infrastructure.serialization.SearchEventCodec;
 import java.nio.charset.StandardCharsets;
 import java.io.IOException;
@@ -51,6 +53,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -156,23 +160,50 @@ class KafkaConsumptionIT {
                 "--app.outbox.enabled=" + publish);
     }
 
-    @Test
-    void refusesPublisherStartupWhenPreviousWorkExists() {
+    @ParameterizedTest
+    @ValueSource(strings = {"READY", "SENT"})
+    void refusesPublisherStartupWhenPreviousWorkExists(String eventState) {
         requireEmptyQueue();
         SearchSubmission search = accept();
+        jdbc.update("UPDATE search_outbox SET state = ? WHERE search_id = HEXTORAW(?)", eventState, hex(search));
         assertAll(
                 () -> assertThrows(IllegalStateException.class, () -> {
                     try (var unexpected = application(true)) {
                         throw new AssertionError("Publisher should not start: " + unexpected.isActive());
                     }
                 }, "Debe conservar el trabajo previo sin arrancar el publicador"),
-                () -> assertEquals("READY", jdbc.queryForObject(
+                () -> assertEquals(eventState, jdbc.queryForObject(
                         "SELECT state FROM search_outbox WHERE search_id = HEXTORAW(?)", String.class, hex(search)),
                         "No modifica ni publica trabajo previo"));
     }
 
+    @Test
+    void republishesOldPendingSearchAndProcessesItOnceThroughKafka()
+            throws InterruptedException, ExecutionException, TimeoutException {
+        requireEmptyQueue();
+        try (var context = application(false);
+                var producer = new KafkaProducer<String, String>(KafkaProducerSettings.properties(SERVERS))) {
+            SearchSubmission search = accept();
+            jdbc.update("UPDATE search_outbox SET state = 'SENT', available_at = SYSTIMESTAMP - INTERVAL '10' MINUTE "
+                    + "WHERE search_id = HEXTORAW(?)", hex(search));
+            int published = new PublishOutboxService(new OracleOutboxAdapter(SOURCE), new KafkaSearchPublisher(producer))
+                    .publishBatch(1);
+            assertAll(
+                    () -> {
+                        assertEquals(1, published, "El evento antiguo debe volver a publicarse en Kafka");
+                        await().atMost(Duration.ofSeconds(20)).until(() -> PROCESSED.equals(state(search)));
+                        awaitCommit(send(search));
+                    },
+                    () -> assertTrue(context.isActive(), "El consumidor sigue activo"),
+                    () -> assertEquals(1, projectionCount(search), "La recuperacion y reentrega no duplican la busqueda"),
+                    () -> assertEquals(0, new OracleOutboxAdapter(SOURCE).recoverPending(100, Duration.ofMinutes(5)),
+                            "La solicitud procesada no vuelve a recuperarse"));
+        }
+    }
+
     private void requireEmptyQueue() {
-        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM search_outbox WHERE state = 'READY'", Integer.class);
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM search_outbox o JOIN search_request r "
+                + "ON r.search_id = o.search_id WHERE o.state = 'READY' OR (o.state = 'SENT' AND r.status = 'PENDING')", Integer.class);
         if (!Integer.valueOf(0).equals(count)) {
             throw new IllegalStateException("El esquema de pruebas contiene trabajo previo; no se publica automaticamente");
         }

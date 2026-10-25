@@ -9,6 +9,7 @@ import java.util.Objects;
 
 public final class PublishOutboxService {
     private static final Duration LEASE = Duration.ofSeconds(60);
+    private static final Duration RECOVERY_AGE = Duration.ofMinutes(5);
     private final OutboxPort outbox;
     private final SearchPublisherPort publisher;
 
@@ -17,11 +18,13 @@ public final class PublishOutboxService {
         this.publisher = Objects.requireNonNull(publisher, "publisher must not be null");
     }
 
-    /** Publishes at most limit events, reserving each immediately before sending.
+    /** Recovers up to limit old unprocessed events, then publishes at most limit events.
+     * Each event is reserved immediately before sending.
      * Returns the number of broker confirmations also committed to the outbox.
      * Stops on transient failure or lost ownership; unexpected errors propagate with the lease recoverable. */
     public int publishBatch(int limit) {
         validateBatchLimit(limit);
+        outbox.recoverPending(limit, RECOVERY_AGE);
         int sent = 0;
         for (int index = 0; index < limit; index++) {
             var available = outbox.claimNext(LEASE);

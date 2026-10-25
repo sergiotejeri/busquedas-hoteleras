@@ -41,6 +41,7 @@ class PublishOutboxServiceTest {
         assertAll(
                 () -> assertEquals(2, sent, "Debe confirmar ambos eventos"),
                 () -> {
+                    order.verify(outbox).recoverPending(100, Duration.ofMinutes(5));
                     order.verify(outbox).claimNext(Duration.ofSeconds(60));
                     order.verify(publisher).publish(FIRST.searchId(), FIRST.eventJson());
                     order.verify(outbox).markSent(FIRST.searchId(), FIRST.token());
@@ -53,12 +54,22 @@ class PublishOutboxServiceTest {
     }
 
     @Test
+    void recoveryFailurePreventsClaimingAndPublishing() {
+        when(outbox.recoverPending(1, Duration.ofMinutes(5))).thenThrow(new IllegalStateException("recovery unavailable"));
+        assertAll(
+                () -> assertThrows(IllegalStateException.class, () -> new PublishOutboxService(outbox, publisher).publishBatch(1)),
+                () -> verify(outbox, never()).claimNext(any()),
+                () -> verifyNoInteractions(publisher));
+    }
+
+    @Test
     void respectsBatchLimitWithoutReservingExtraWork() {
         ready(FIRST, PublicationResult.CONFIRMED);
         when(outbox.markSent(any(), any())).thenReturn(true);
         assertAll(
                 () -> assertEquals(1, new PublishOutboxService(outbox, publisher).publishBatch(1), "Lote de un evento"),
-                () -> verify(outbox).claimNext(Duration.ofSeconds(60)));
+                () -> verify(outbox).claimNext(Duration.ofSeconds(60)),
+                () -> verify(outbox).recoverPending(1, Duration.ofMinutes(5)));
     }
 
     @ParameterizedTest

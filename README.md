@@ -49,7 +49,7 @@ Swagger: `http://localhost:8080/swagger-ui.html`. OpenAPI: `http://localhost:808
 - La solicitud y el evento se guardan juntos en Oracle. El evento tiene un contrato JSON versionado; los criterios almacenados usan fechas ISO y una representación determinista.
 - La outbox reserva los eventos de uno en uno y confirma solo con el token vigente. El servicio admite hasta 100 por ciclo; ante un fallo transitorio aplaza el evento entre 1 y 30 segundos y detiene el ciclo. Un rechazo permanente se guarda sin degradar búsquedas ya procesadas.
 - El productor envía el JSON original a `hotel_availability_searches`, con el ID como clave, y espera la confirmación de Kafka. Un timeout deja el envío recuperable: puede haberse recibido y volver a entregarse.
-- El envío se ejecuta en segundo plano, con un segundo entre ciclos y hasta 100 eventos por lote. Si Kafka falla, la solicitud sigue guardada y el envío se reintenta.
+- El envío se ejecuta en segundo plano, con un segundo entre ciclos y hasta 100 eventos por lote. Si Kafka falla, se reintenta. También se reenvían eventos confirmados hace al menos cinco minutos si la búsqueda sigue pendiente; se conserva el mismo ID.
 - El consumidor persiste en hilos virtuales y confirma Kafka después del guardado. Si falla Oracle, reintenta sin descartar el mensaje.
 
 ## Pruebas y calidad

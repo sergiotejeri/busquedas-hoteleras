@@ -59,7 +59,8 @@ class KafkaPublicationIT {
 
     @BeforeEach
     void requireEmptyQueue() {
-        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM search_outbox WHERE state = 'READY'", Integer.class);
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM search_outbox o JOIN search_request r "
+                + "ON r.search_id = o.search_id WHERE o.state = 'READY' OR (o.state = 'SENT' AND r.status = 'PENDING')", Integer.class);
         if (!Integer.valueOf(0).equals(count)) {
             throw new IllegalStateException("El esquema de pruebas contiene trabajo previo");
         }

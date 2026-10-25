@@ -27,7 +27,7 @@ public final class OracleOutboxAdapter implements OutboxPort {
             WHERE search_id = ? AND state = 'READY' AND available_at <= SYSTIMESTAMP
             """;
     private static final String MARK_SENT = """
-            UPDATE search_outbox SET state = 'SENT', lease_token = NULL
+            UPDATE search_outbox SET state = 'SENT', lease_token = NULL, available_at = SYSTIMESTAMP
             WHERE search_id = ? AND lease_token = ? AND state = 'READY'
                 AND available_at > SYSTIMESTAMP
             """;
@@ -40,6 +40,19 @@ public final class OracleOutboxAdapter implements OutboxPort {
             UPDATE search_outbox SET state = ?, lease_token = NULL
             WHERE search_id = ? AND lease_token = ? AND state = 'READY' AND available_at > SYSTIMESTAMP
             """;
+    private static final String SELECT_RECOVERABLE = """
+            SELECT r.search_id FROM search_outbox o
+            JOIN search_request r ON r.search_id = o.search_id
+            WHERE o.state = 'SENT' AND r.status = 'PENDING'
+                AND o.available_at <= SYSTIMESTAMP - NUMTODSINTERVAL(?, 'SECOND')
+            ORDER BY o.available_at, o.search_id FOR UPDATE OF r.status SKIP LOCKED
+            """;
+    private static final String RECOVER = """
+            UPDATE search_outbox o SET state = 'READY', lease_token = NULL, available_at = SYSTIMESTAMP
+            WHERE o.search_id = ? AND o.state = 'SENT'
+                AND o.available_at <= SYSTIMESTAMP - NUMTODSINTERVAL(?, 'SECOND')
+                AND EXISTS (SELECT 1 FROM search_request r WHERE r.search_id = o.search_id AND r.status = 'PENDING')
+            """;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
 
@@ -49,6 +62,28 @@ public final class OracleOutboxAdapter implements OutboxPort {
         transaction = new TransactionTemplate(new JdbcTransactionManager(source));
         transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         transaction.setTimeout(15);
+    }
+
+    @Override
+    public int recoverPending(int limit, Duration minimumAge) {
+        Objects.requireNonNull(minimumAge, "minimumAge must not be null");
+        if (limit < 1 || limit > 100 || minimumAge.isZero() || minimumAge.isNegative()
+                || minimumAge.compareTo(Duration.ofDays(1)) > 0) {
+            throw new IllegalArgumentException("recovery needs a batch of 1 to 100 and an age greater than zero up to one day");
+        }
+        BigDecimal ageSeconds = seconds(minimumAge);
+        // Lock requests first, as processing and permanent failure do; skip active consumers.
+        return Objects.requireNonNull(transaction.execute(status -> jdbc.query(SELECT_RECOVERABLE, statement -> {
+            statement.setBigDecimal(1, ageSeconds);
+            statement.setFetchSize(1);
+            statement.setMaxRows(limit);
+        }, rows -> {
+            int recovered = 0;
+            while (rows.next()) {
+                recovered += jdbc.update(RECOVER, rows.getBytes(1), ageSeconds);
+            }
+            return recovered;
+        })), "Recovery transaction must return a result");
     }
 
     @Override
