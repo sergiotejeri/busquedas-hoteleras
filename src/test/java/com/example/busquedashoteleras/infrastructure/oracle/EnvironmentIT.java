@@ -38,8 +38,8 @@ class EnvironmentIT {
             migrations.validate();
             assertAll(
                     () -> assertEquals("SEARCH_IT", actualUser, "Debe usar el esquema aislado de pruebas"),
-                    () -> assertEquals("5", migrations.info().current().getVersion().getVersion(),
-                            "Debe haber aplicado las migraciones de aceptacion, reservas, reintentos, grupos y procesamiento"),
+                    () -> assertEquals("6", migrations.info().current().getVersion().getVersion(),
+                            "Debe haber aplicado las migraciones de aceptacion, reservas, reintentos, grupos, procesamiento y cuarentena"),
                     () -> assertEquals(0, migrations.migrate().migrationsExecuted,
                             "Repetir la migracion no debe recrear las tablas"));
         }

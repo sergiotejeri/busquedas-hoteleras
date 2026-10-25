@@ -35,6 +35,7 @@ Los datos inválidos devuelven `400` con código, campo y mensaje. El evento ser
 - Los grupos se buscan por hash y se comparan por su contenido completo, conservando el orden de las edades.
 - El procesamiento guarda la búsqueda y su estado en una transacción. Repetir el mismo evento no duplica la búsqueda; los criterios deben coincidir con la solicitud aceptada.
 - El conteo obtiene el estado, los criterios y el total en una sola consulta a Oracle. Solo cuenta búsquedas procesadas del mismo grupo.
+- La cuarentena guarda el mensaje rechazado y su motivo, sin duplicar reentregas ni cambiar búsquedas aceptadas.
 - La solicitud y el evento se guardan juntos en Oracle. El evento tiene un contrato JSON versionado; los criterios almacenados usan fechas ISO y una representación determinista.
 - La outbox reserva los eventos de uno en uno y confirma solo con el token vigente. El servicio admite hasta 100 por ciclo; ante un fallo transitorio aplaza el evento entre 1 y 30 segundos y detiene el ciclo. Un rechazo permanente se guarda sin degradar búsquedas ya procesadas.
 - El productor envía el JSON original a `hotel_availability_searches`, con el ID como clave, y espera la confirmación de Kafka. Un timeout deja el envío recuperable: puede haberse recibido y volver a entregarse.
@@ -76,4 +77,4 @@ Kafka y su cliente usan 4.4.0. El broker local tiene tres particiones y una rép
 
 Compose separa los usuarios de aplicación y pruebas. Las contraseñas son de desarrollo local y Oracle no publica puertos. El volumen `oracle-data` conserva los datos entre arranques.
 
-Flyway aplica las migraciones al iniciar: V1 crea las tablas, V2 añade las reservas y V3 conserva el nivel de reintento, V4 añade los grupos de criterios y V5 las búsquedas procesadas. `clean` está desactivado; los cambios de esquema se añaden mediante nuevas migraciones.
+Flyway aplica las migraciones al iniciar: V1 crea las tablas, V2 añade las reservas y V3 conserva el nivel de reintento, V4 añade los grupos de criterios, V5 las búsquedas procesadas y V6 la cuarentena. `clean` está desactivado; los cambios de esquema se añaden mediante nuevas migraciones.
