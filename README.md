@@ -22,7 +22,7 @@ docker compose stop
 curl -i http://localhost:8080/search -H "Content-Type: application/json" -d '{"hotelId":"hotel-1","checkIn":"01/12/2026","checkOut":"03/12/2026","ages":[30,1]}'
 ```
 
-Devuelve `202` con `{"searchId":"UUID"}` después de guardar la solicitud y su evento pendiente en una misma transacción. Cada solicitud recibe un ID distinto, aunque sus criterios coincidan. El `202` es una decisión del contrato: la búsqueda está aceptada, todavía no procesada.
+Devuelve `202` con `{"searchId":"UUID"}` después de guardar la solicitud y su evento pendiente en una misma transacción. Cada solicitud recibe un ID distinto, aunque sus criterios coincidan. El `202` es una decisión del contrato y confirma la aceptación para procesamiento asíncrono.
 
 El hotel no puede estar vacío, la entrada debe ser anterior a la salida y las edades deben ser enteros no negativos en una lista no vacía. Todos los campos son obligatorios y las fechas usan `dd/MM/yyyy`. Se rechazan propiedades desconocidas, duplicadas y conversiones implícitas de tipos.
 
@@ -40,6 +40,7 @@ Los datos inválidos devuelven `400` con código, campo y mensaje. El evento ser
 - La outbox reserva los eventos de uno en uno y confirma solo con el token vigente. El servicio admite hasta 100 por ciclo; ante un fallo transitorio aplaza el evento entre 1 y 30 segundos y detiene el ciclo. Un rechazo permanente se guarda sin degradar búsquedas ya procesadas.
 - El productor envía el JSON original a `hotel_availability_searches`, con el ID como clave, y espera la confirmación de Kafka. Un timeout deja el envío recuperable: puede haberse recibido y volver a entregarse.
 - El envío se ejecuta en segundo plano, con un segundo entre ciclos y hasta 100 eventos por lote. Si Kafka falla, la solicitud sigue guardada y el envío se reintenta.
+- El consumidor persiste en hilos virtuales y confirma Kafka después del guardado. Si falla Oracle, reintenta sin descartar el mensaje.
 
 ## Pruebas y calidad
 

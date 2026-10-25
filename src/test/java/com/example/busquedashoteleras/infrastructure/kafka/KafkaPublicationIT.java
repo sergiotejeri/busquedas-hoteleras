@@ -116,6 +116,7 @@ class KafkaPublicationIT {
         return new SpringApplicationBuilder(BusquedasHotelerasApplication.class)
                 .web(WebApplicationType.SERVLET).run(
                         "--server.port=0",
+                        "--app.consumer.enabled=false",
                         "--spring.datasource.url=" + required("TEST_DB_URL"),
                         "--spring.datasource.username=" + required("TEST_DB_USER"),
                         "--spring.datasource.password=" + required("TEST_DB_PASSWORD"),
