@@ -26,7 +26,7 @@ Devuelve `202` con `{"searchId":"UUID"}` después de guardar la solicitud y su e
 
 El hotel no puede estar vacío, la entrada debe ser anterior a la salida y las edades deben ser enteros no negativos en una lista no vacía. Todos los campos son obligatorios y las fechas usan `dd/MM/yyyy`. Se rechazan propiedades desconocidas, duplicadas y conversiones implícitas de tipos.
 
-Los datos inválidos devuelven `400` con código, campo y mensaje. El evento serializado admite hasta 262.144 bytes UTF-8; superar ese límite produce un error global. Si no se puede obtener conexión, devuelve `503`. Una confirmación perdida puede dejar un resultado incierto: repetir el POST crea otra solicitud.
+Los datos inválidos devuelven `400` con código, campo y mensaje. El cuerpo admite hasta 1 MiB, también sin `Content-Length`; el evento serializado, hasta 262.144 bytes UTF-8. Son límites técnicos: superarlos devuelve un error global `REQUEST_TOO_LARGE`. Si no se puede obtener conexión, devuelve `503`. Una confirmación perdida puede dejar un resultado incierto: repetir el POST crea otra solicitud.
 
 ## Consultar el conteo
 

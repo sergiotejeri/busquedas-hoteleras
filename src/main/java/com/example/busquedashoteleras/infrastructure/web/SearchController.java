@@ -25,7 +25,8 @@ public final class SearchController {
     @ResponseStatus(HttpStatus.ACCEPTED)
     @Operation(summary = "Acepta una busqueda para procesamiento asincrono",
             description = "Campos obligatorios; fechas dd/MM/yyyy y entrada anterior a salida; edades enteras no negativas. "
-                    + "Rechaza propiedades desconocidas y duplicadas. El evento admite hasta 262144 bytes UTF-8.")
+                    + "Rechaza propiedades desconocidas y duplicadas. El cuerpo admite hasta 1048576 bytes; "
+                    + "el evento serializado admite hasta 262144 bytes UTF-8. El exceso devuelve 400 REQUEST_TOO_LARGE, sin campo.")
     @ApiResponses({
         @ApiResponse(responseCode = "202", description = "Solicitud y evento guardados; ID nuevo en cada peticion",
                 content = @Content(schema = @Schema(implementation = AcceptedSearch.class))),

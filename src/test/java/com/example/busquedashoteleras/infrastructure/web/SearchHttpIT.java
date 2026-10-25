@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.example.busquedashoteleras.infrastructure.serialization.SearchEventCodec;
 import java.io.IOException;
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -17,6 +19,8 @@ import java.util.Objects;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.env.Environment;
@@ -28,6 +32,7 @@ import tools.jackson.databind.json.JsonMapper;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {"app.outbox.enabled=false", "app.consumer.enabled=false"})
 class SearchHttpIT {
     private static final JsonMapper JSON = JsonMapper.builder().build();
+    private static final String COUNT_REQUESTS = "SELECT COUNT(*) FROM search_request";
     private static final String BODY = "{\"hotelId\":\"http-hotel\",\"checkIn\":\"01/01/2024\","
             + "\"checkOut\":\"02/01/2024\",\"ages\":[30,1]}";
     private final List<String> ids = new ArrayList<>();
@@ -48,6 +53,36 @@ class SearchHttpIT {
         for (String id : ids) {
             jdbc.update("DELETE FROM search_outbox WHERE search_id = HEXTORAW(?)", id);
             jdbc.update("DELETE FROM search_request WHERE search_id = HEXTORAW(?)", id);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void enforcesBodyBoundaryWithFixedOrChunkedTransfer(boolean knownLength) throws IOException, InterruptedException {
+        String exact = BODY + " ".repeat(RequestBodyLimitFilter.MAX_BODY_BYTES - BODY.getBytes(StandardCharsets.UTF_8).length);
+        var accepted = postSized(exact.getBytes(StandardCharsets.UTF_8), knownLength);
+        if (accepted.statusCode() == org.springframework.http.HttpStatus.ACCEPTED.value()) {
+            ids.add(UUID.fromString(JSON.readTree(accepted.body()).get("searchId").asString()).toString().replace("-", ""));
+        }
+        int before = Objects.requireNonNull(jdbc.queryForObject(COUNT_REQUESTS, Integer.class));
+        var rejected = postSized((exact + " ").getBytes(StandardCharsets.UTF_8), knownLength);
+        var error = JSON.readTree(rejected.body());
+        assertAll(
+                () -> assertEquals(202, accepted.statusCode(), "El limite exacto conserva JSON valido con espacios"),
+                () -> assertEquals(400, rejected.statusCode(), "Un byte adicional se rechaza"),
+                () -> assertEquals("REQUEST_TOO_LARGE", error.get("code").asString(), "Identifica el exceso"),
+                () -> assertTrue(error.get("field").isNull(), "El error no pertenece a hotelId"),
+                () -> assertEquals(before, jdbc.queryForObject(COUNT_REQUESTS, Integer.class),
+                        "No persiste la solicitud excesiva"));
+    }
+
+    private HttpResponse<String> postSized(byte[] body, boolean knownLength) throws IOException, InterruptedException {
+        var publisher = knownLength ? HttpRequest.BodyPublishers.ofByteArray(body)
+                : HttpRequest.BodyPublishers.ofInputStream(() -> new ByteArrayInputStream(body));
+        URI uri = URI.create("http://localhost:" + environment.getRequiredProperty("local.server.port") + "/search");
+        try (var client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build()) {
+            return client.send(HttpRequest.newBuilder(uri).timeout(java.time.Duration.ofSeconds(10))
+                    .header("Content-Type", "application/json").POST(publisher).build(), HttpResponse.BodyHandlers.ofString());
         }
     }
 
@@ -114,14 +149,14 @@ class SearchHttpIT {
 
     @Test
     void rejectsExcessiveEventAsGlobalErrorWithoutWriting() throws IOException, InterruptedException {
-        int before = Objects.requireNonNull(jdbc.queryForObject("SELECT COUNT(*) FROM search_request", Integer.class));
+        int before = Objects.requireNonNull(jdbc.queryForObject(COUNT_REQUESTS, Integer.class));
         HttpResponse<String> response = post(BODY.replace("http-hotel", "x".repeat(262144)));
         var error = JSON.readTree(response.body());
         assertAll(
                 () -> assertEquals(400, response.statusCode(), "El exceso de tamano debe ser BAD_REQUEST"),
                 () -> assertEquals("REQUEST_TOO_LARGE", error.get("code").asString(), "Debe identificar el tamano"),
                 () -> assertTrue(error.get("field").isNull(), "El limite es global, no de hotelId"),
-                () -> assertEquals(before, jdbc.queryForObject("SELECT COUNT(*) FROM search_request", Integer.class),
+                () -> assertEquals(before, jdbc.queryForObject(COUNT_REQUESTS, Integer.class),
                         "El rechazo no debe guardar la solicitud"));
     }
 

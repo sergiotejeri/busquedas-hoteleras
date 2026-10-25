@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FindBugsFilter>
+    <!-- Servlet exposes a consumable request stream. Returning the same cursor is intentional. -->
+    <Match>
+        <Class name="com.example.busquedashoteleras.infrastructure.web.RequestBodyLimitFilter$BufferedRequest"/>
+        <Method name="getInputStream"/>
+        <Bug pattern="EI_EXPOSE_REP"/>
+    </Match>
+</FindBugsFilter>
