@@ -36,7 +36,7 @@ public record SearchRequest(
         if (value == null) {
             return null;
         }
-        if (!value.matches("[0-9]{2}/[0-9]{2}/[0-9]{4}")) {
+        if (!value.matches("[0-9]{2}/[0-9]{2}/[0-9]{4}") || value.endsWith("/0000")) {
             throw invalidDate(field);
         }
         try {

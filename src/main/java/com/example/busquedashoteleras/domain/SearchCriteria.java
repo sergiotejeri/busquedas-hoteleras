@@ -1,12 +1,16 @@
 package com.example.busquedashoteleras.domain;
 
 import java.time.LocalDate;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 public record SearchCriteria(String hotelId, LocalDate checkIn, LocalDate checkOut, List<Integer> ages) {
     public SearchCriteria {
         if (hotelId == null || hotelId.isBlank()) {
             throw new InvalidSearchException("INVALID_HOTEL_ID", "hotelId", "hotelId must not be blank");
+        }
+        if (!StandardCharsets.UTF_8.newEncoder().canEncode(hotelId)) {
+            throw new InvalidSearchException("INVALID_HOTEL_ID", "hotelId", "hotelId must contain well-formed Unicode");
         }
         if (checkIn == null) {
             throw new InvalidSearchException("INVALID_STAY", "checkIn", "checkIn must not be null");

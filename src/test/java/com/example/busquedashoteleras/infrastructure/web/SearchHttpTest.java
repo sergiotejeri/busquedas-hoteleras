@@ -18,6 +18,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
@@ -32,6 +33,8 @@ import tools.jackson.databind.node.ObjectNode;
 @WebMvcTest(SearchController.class)
 @Import({SearchHttpTest.UseCase.class, JsonInputConfiguration.class})
 class SearchHttpTest {
+    private static final String ERROR_CODE = "$.code";
+    private static final String ERROR_FIELD = "$.field";
     private static final String SEARCH_PATH = "/search";
     private static final String JSON_TYPE = "application/json";
     private static final UUID ID = UUID.fromString("c40c839d-e50d-4805-966c-6376baa01d33");
@@ -86,10 +89,10 @@ class SearchHttpTest {
         ObjectNode body = (ObjectNode) JsonMapper.builder().build().readTree(VALID);
         body.putNull(field);
         mvc.perform(post(SEARCH_PATH).contentType(JSON_TYPE).content(body.toString()))
-                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value(field));
+                .andExpect(status().isBadRequest()).andExpect(jsonPath(ERROR_FIELD).value(field));
         body.remove(field);
         mvc.perform(post(SEARCH_PATH).contentType(JSON_TYPE).content(body.toString()))
-                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value(field));
+                .andExpect(status().isBadRequest()).andExpect(jsonPath(ERROR_FIELD).value(field));
         verifyNoInteractions(port);
     }
 
@@ -107,13 +110,47 @@ class SearchHttpTest {
                 .when(port).accept(org.mockito.ArgumentMatchers.any());
         assertAll(() -> mvc.perform(post(SEARCH_PATH).contentType(JSON_TYPE).content(VALID))
                 .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.code").value("STORAGE_UNAVAILABLE"))
+                .andExpect(jsonPath(ERROR_CODE).value("STORAGE_UNAVAILABLE"))
                 .andExpect(jsonPath("$.message").value("Search could not be confirmed. Try again later.")));
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"checkIn", "checkOut"})
+    void rejectsYearZeroWithFieldError(String field) throws Exception {
+        ObjectNode body = (ObjectNode) JsonMapper.builder().build().readTree(VALID);
+        body.put(field, "01/01/0000");
+        mvc.perform(post(SEARCH_PATH).contentType(JSON_TYPE).content(body.toString()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath(ERROR_CODE).value("INVALID_DATE"))
+                .andExpect(jsonPath(ERROR_FIELD).value(field));
+        verifyNoInteractions(port);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"01/01/0001,02/01/0001", "30/12/9999,31/12/9999", "31/12/2026,01/01/2027"})
+    void acceptsSupportedDateBoundaries(String checkIn, String checkOut) throws Exception {
+        ObjectNode body = (ObjectNode) JsonMapper.builder().build().readTree(VALID);
+        body.put("checkIn", checkIn);
+        body.put("checkOut", checkOut);
+        mvc.perform(post(SEARCH_PATH).contentType(JSON_TYPE).content(body.toString()))
+                .andExpect(status().isAccepted()).andExpect(jsonPath("$.searchId").value(ID.toString()));
+        var formatter = java.time.format.DateTimeFormatter.ofPattern("dd/MM/uuuu");
+        verify(port).accept(new SearchSubmission(ID, new SearchCriteria("hotel",
+                LocalDate.parse(checkIn, formatter), LocalDate.parse(checkOut, formatter), List.of(30, 0, 30))));
+    }
+    @ParameterizedTest
+    @ValueSource(strings = {"\\ud800", "\\udc00", "\\ud800x"})
+    void rejectsMalformedUnicodeBeforeAcceptance(String escapedHotel) throws Exception {
+        String body = VALID.replace("\"hotel\"", "\"hotel-" + escapedHotel + "\"");
+        mvc.perform(post(SEARCH_PATH).contentType(JSON_TYPE).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath(ERROR_CODE).value("INVALID_HOTEL_ID"))
+                .andExpect(jsonPath(ERROR_FIELD).value("hotelId"));
+        verifyNoInteractions(port);
+    }
     private void assertRejected(String body) throws Exception {
         mvc.perform(post(SEARCH_PATH).contentType(JSON_TYPE).content(body))
-                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").isNotEmpty())
+                .andExpect(status().isBadRequest()).andExpect(jsonPath(ERROR_CODE).isNotEmpty())
                 .andExpect(jsonPath("$.message").isNotEmpty());
         verifyNoInteractions(port);
     }

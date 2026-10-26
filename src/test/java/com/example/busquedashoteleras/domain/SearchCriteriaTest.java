@@ -16,6 +16,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 class SearchCriteriaTest {
+    private static final String INVALID_HOTEL_ID = "INVALID_HOTEL_ID";
+    private static final String HOTEL_FIELD = "hotelId";
     private static final String HOTEL = "1234";
     private static final LocalDate CHECK_IN = LocalDate.of(2025, 1, 1);
     private static final LocalDate CHECK_OUT = CHECK_IN.plusDays(1);
@@ -41,9 +43,12 @@ class SearchCriteriaTest {
 
     private static Stream<Arguments> invalidCriteria() {
         return Stream.of(
-                Arguments.of(null, CHECK_IN, CHECK_OUT, List.of(30), "INVALID_HOTEL_ID", "hotelId", "hotelId must not be blank"),
-                Arguments.of("", CHECK_IN, CHECK_OUT, List.of(30), "INVALID_HOTEL_ID", "hotelId", "hotelId must not be blank"),
-                Arguments.of(" \t\n", CHECK_IN, CHECK_OUT, List.of(30), "INVALID_HOTEL_ID", "hotelId", "hotelId must not be blank"),
+                Arguments.of(null, CHECK_IN, CHECK_OUT, List.of(30), INVALID_HOTEL_ID, HOTEL_FIELD, "hotelId must not be blank"),
+                Arguments.of("", CHECK_IN, CHECK_OUT, List.of(30), INVALID_HOTEL_ID, HOTEL_FIELD, "hotelId must not be blank"),
+                Arguments.of(" \t\n", CHECK_IN, CHECK_OUT, List.of(30), INVALID_HOTEL_ID, HOTEL_FIELD, "hotelId must not be blank"),
+                Arguments.of("hotel-\uD800", CHECK_IN, CHECK_OUT, List.of(30), INVALID_HOTEL_ID, HOTEL_FIELD, "hotelId must contain well-formed Unicode"),
+                Arguments.of("hotel-\uDC00", CHECK_IN, CHECK_OUT, List.of(30), INVALID_HOTEL_ID, HOTEL_FIELD, "hotelId must contain well-formed Unicode"),
+                Arguments.of("hotel-\uD800x", CHECK_IN, CHECK_OUT, List.of(30), INVALID_HOTEL_ID, HOTEL_FIELD, "hotelId must contain well-formed Unicode"),
                 Arguments.of(HOTEL, null, CHECK_OUT, List.of(30), INVALID_STAY, "checkIn", "checkIn must not be null"),
                 Arguments.of(HOTEL, CHECK_IN, null, List.of(30), INVALID_STAY, "checkOut", "checkOut must not be null"),
                 Arguments.of(HOTEL, CHECK_IN, CHECK_IN, List.of(30), INVALID_STAY, "checkOut", "checkOut must be after checkIn"),

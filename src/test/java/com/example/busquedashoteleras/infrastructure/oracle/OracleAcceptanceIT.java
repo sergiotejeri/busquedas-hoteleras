@@ -68,6 +68,20 @@ class OracleAcceptanceIT {
                         "El evento debe corresponder a la solicitud"));
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"hotel-ñ界😀", "𐀀𠮷𝄞", "hotel-\"\\\n\t"})
+    void preservesUnicodeAndDateBoundaries(String hotel) {
+        var criteria = new com.example.busquedashoteleras.domain.SearchCriteria(hotel,
+                java.time.LocalDate.of(1, 1, 1), java.time.LocalDate.of(9999, 12, 31), java.util.List.of(30, 0, 30));
+        var submission = new SearchSubmission(identifier(), criteria);
+        adapter.accept(submission);
+        Stored stored = stored(submission.searchId());
+        assertAll(
+                () -> assertEquals(criteria, new CanonicalCriteriaCodec().decode(stored.criteria()),
+                        "Oracle conserva Unicode valido y los extremos del rango de fechas"),
+                () -> assertEquals(submission, new SearchEventCodec().decode(stored.event()),
+                        "El evento conserva los mismos datos que la solicitud"));
+    }
     @Test
     void keepsEqualSearchesWithDifferentIdentities() {
         SearchSubmission first = AcceptanceFixtures.submission(identifier(), "same-hotel");

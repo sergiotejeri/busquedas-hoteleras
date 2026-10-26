@@ -24,7 +24,7 @@ curl -i http://localhost:8080/search -H "Content-Type: application/json" -d '{"h
 
 Devuelve `202` con `{"searchId":"UUID"}` después de guardar la solicitud y su evento pendiente en una misma transacción. Cada solicitud recibe un ID distinto, aunque sus criterios coincidan. El `202` es una decisión del contrato y confirma la aceptación para procesamiento asíncrono.
 
-El hotel no puede estar vacío, la entrada debe ser anterior a la salida y las edades deben ser enteros no negativos en una lista no vacía. Todos los campos son obligatorios y las fechas usan `dd/MM/yyyy`. Se rechazan propiedades desconocidas, duplicadas y conversiones implícitas de tipos.
+El hotel no puede estar vacío ni contener Unicode mal formado, la entrada debe ser anterior a la salida y las edades deben ser enteros no negativos en una lista no vacía. Todos los campos son obligatorios y las fechas usan `dd/MM/yyyy`, con años de `0001` a `9999`. Se rechazan propiedades desconocidas, duplicadas y conversiones implícitas de tipos.
 
 Los datos inválidos devuelven `400` con código, campo y mensaje. El cuerpo admite hasta 1 MiB, también sin `Content-Length`; el evento serializado, hasta 262.144 bytes UTF-8. Son límites técnicos: superarlos devuelve un error global `REQUEST_TOO_LARGE`. Si no se puede obtener conexión, devuelve `503`. Una confirmación perdida puede dejar un resultado incierto: repetir el POST crea otra solicitud.
 
