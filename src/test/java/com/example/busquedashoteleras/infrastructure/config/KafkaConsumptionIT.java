@@ -10,16 +10,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.example.busquedashoteleras.BusquedasHotelerasApplication;
 import com.example.busquedashoteleras.application.port.FailurePort;
 import com.example.busquedashoteleras.application.port.ProcessSearchPort;
+import com.example.busquedashoteleras.application.port.PublicationResult;
 import com.example.busquedashoteleras.application.service.PublishOutboxService;
 import com.example.busquedashoteleras.domain.SearchCriteria;
 import com.example.busquedashoteleras.domain.SearchSubmission;
 import com.example.busquedashoteleras.infrastructure.kafka.KafkaProducerSettings;
 import com.example.busquedashoteleras.infrastructure.kafka.KafkaSearchPublisher;
+import com.example.busquedashoteleras.infrastructure.kafka.KafkaSearchConsumer;
 import com.example.busquedashoteleras.infrastructure.kafka.VirtualPersistenceExecutor;
 import com.example.busquedashoteleras.infrastructure.oracle.OracleAcceptanceAdapter;
 import com.example.busquedashoteleras.infrastructure.oracle.OracleOutboxAdapter;
 import com.example.busquedashoteleras.infrastructure.serialization.SearchEventCodec;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -45,19 +49,26 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.clients.admin.AlterConfigOp;
+import org.apache.kafka.clients.admin.ConfigEntry;
+import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.OffsetSpec;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.config.ConfigResource;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -79,6 +90,8 @@ class KafkaConsumptionIT {
     private final List<SearchSubmission> searches = Collections.synchronizedList(new ArrayList<>());
     private final List<RecordMetadata> sent = new ArrayList<>();
     private Admin admin;
+    @TempDir
+    private Path temporaryDirectory;
 
     @BeforeAll
     static void migrate() {
@@ -203,6 +216,174 @@ class KafkaConsumptionIT {
             assertEquals(total, members.size(), "Se aceptan todas las solicitudes del grupo");
             await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertAll(members.stream()
                     .map(search -> () -> checkHttpCount(client, base, search.searchId(), ages, total))));
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(RecoveryProcess.Phase.class)
+    void abruptProcessDeathPreservesAcceptedSearchAndDoesNotDoubleCount(RecoveryProcess.Phase phase)
+            throws IOException, InterruptedException, ExecutionException, TimeoutException {
+        requireEmptyQueue();
+        var search = new SearchSubmission(UUID.randomUUID(), new SearchCriteria(hotel,
+                LocalDate.of(2026, 12, 1), LocalDate.of(2026, 12, 3), List.of(30, 1)));
+        searches.add(search);
+        var offsetsBefore = admin.listConsumerGroupOffsets(group).partitionsToOffsetAndMetadata().get(10, TimeUnit.SECONDS);
+        killAtBoundary(phase, search, offsetsBefore);
+        try (var context = application(false);
+                var producer = new KafkaProducer<String, String>(KafkaProducerSettings.properties(SERVERS))) {
+            var relay = new PublishOutboxService(new OracleOutboxAdapter(SOURCE), new KafkaSearchPublisher(producer));
+            awaitRecovery(relay, search);
+            awaitCommit(send(search));
+            assertAll(
+                    () -> assertTrue(context.isActive(), "La instancia recuperada sigue activa"),
+                    () -> assertEquals(1, projectionCount(search), "La recuperacion y la reentrega cuentan una sola vez"));
+        }
+    }
+
+    private void checkCutBoundary(RecoveryProcess.Phase phase, SearchSubmission search,
+            Map<TopicPartition, OffsetAndMetadata> offsetsBefore) {
+        boolean processed = phase == RecoveryProcess.Phase.PROCESSED;
+        assertAll(
+                () -> assertEquals(processed ? PROCESSED : "PENDING", state(search), "El commit sobrevive al corte"),
+                () -> assertEquals(processed ? 1 : 0, projectionCount(search), "Solo persiste en la frontera prevista"),
+                () -> assertEquals(processed ? "SENT" : "READY", jdbc.queryForObject(
+                        "SELECT state FROM search_outbox WHERE search_id = HEXTORAW(?)", String.class, hex(search)),
+                        "La outbox conserva la frontera de publicacion"),
+                () -> assertEquals(phase == RecoveryProcess.Phase.PUBLISHED ? 1 : 0, jdbc.queryForObject(
+                        "SELECT COUNT(*) FROM search_outbox WHERE search_id = HEXTORAW(?) AND lease_token IS NOT NULL",
+                        Integer.class, hex(search)), "El corte tras publicar deja la reserva sin confirmar"),
+                () -> assertEquals(offsetsBefore, admin.listConsumerGroupOffsets(group)
+                        .partitionsToOffsetAndMetadata().get(10, TimeUnit.SECONDS), "El hijo no confirma Kafka antes del corte"));
+    }
+
+    private void awaitRecovery(PublishOutboxService relay, SearchSubmission search) {
+        await().atMost(Duration.ofSeconds(90)).pollInterval(Duration.ofMillis(500)).untilAsserted(() -> {
+            relay.publishBatch(1);
+            assertAll(
+                    () -> assertEquals("SENT", jdbc.queryForObject(
+                            "SELECT state FROM search_outbox WHERE search_id = HEXTORAW(?)", String.class, hex(search)),
+                            "La reserva vencida vuelve a publicarse sin cambiar el reloj de Oracle"),
+                    () -> assertEquals(PROCESSED, state(search), "La nueva instancia termina el procesamiento"));
+        });
+    }
+
+    private void killAtBoundary(RecoveryProcess.Phase phase, SearchSubmission search,
+            Map<TopicPartition, OffsetAndMetadata> offsetsBefore) throws IOException, InterruptedException {
+        Path marker = temporaryDirectory.resolve("ready");
+        Path log = temporaryDirectory.resolve("child.log");
+        String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
+        var builder = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                "-cp", classpath, RecoveryProcess.class.getName(), phase.name(), search.searchId().toString(), hotel,
+                marker.toString(), group).redirectErrorStream(true).redirectOutput(log.toFile());
+        try (var running = new RunningProcess(builder.start())) {
+            Process child = running.process();
+            await().atMost(Duration.ofSeconds(40)).until(() -> Files.exists(marker) || !child.isAlive());
+            assertAll(
+                    () -> assertTrue(Files.exists(marker), Files.readString(log)),
+                    () -> assertTrue(child.isAlive(), "El hijo espera el corte en la frontera indicada"));
+            child.destroyForcibly();
+            assertTrue(child.waitFor(10, TimeUnit.SECONDS), "El proceso debe terminar tras SIGKILL");
+            assertEquals(137, child.exitValue(), "Corte brusco en el ejecutor Linux, sin cierre graceful");
+        }
+        checkCutBoundary(phase, search, offsetsBefore);
+    }
+
+    private record RunningProcess(Process process) implements AutoCloseable {
+        @Override
+        public void close() throws InterruptedException {
+            if (process.isAlive()) {
+                process.destroyForcibly();
+                if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("No se pudo detener el proceso auxiliar: " + process.pid());
+                }
+            }
+        }
+    }
+
+    @Test
+    void expiredKafkaRecordIsRepublishedFromDurableOutbox()
+            throws InterruptedException, ExecutionException, TimeoutException {
+        requireEmptyQueue();
+        String topic = "retention-" + UUID.randomUUID();
+        var partition = new TopicPartition(topic, 0);
+        admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1).configs(Map.of(
+                "cleanup.policy", "delete", "retention.ms", "1000", "segment.ms", "1000",
+                "file.delete.delay.ms", "1000")))).all().get(10, TimeUnit.SECONDS);
+        try (var producer = new KafkaProducer<String, String>(KafkaProducerSettings.properties(SERVERS));
+                var consumer = new KafkaConsumer<String, String>(ConsumptionConfiguration.consumerSettings(SERVERS, group));
+                var executor = configuration.persistenceExecutor(configuration.processingPort(SOURCE))) {
+            SearchSubmission search = accept();
+            var relay = new PublishOutboxService(new OracleOutboxAdapter(SOURCE),
+                    (id, json) -> publishToTestTopic(producer, topic, id, json));
+            confirmOriginalPublication(relay);
+            long originalEnd = offset(partition, OffsetSpec.latest());
+            // Solo este topic efimero usa retencion corta; no se altera el topic del servicio.
+            await().atMost(Duration.ofMinutes(7)).pollInterval(Duration.ofSeconds(2)).until(() -> {
+                producer.send(new ProducerRecord<>(topic, "roll", "roll")).get(10, TimeUnit.SECONDS);
+                return offset(partition, OffsetSpec.earliest()) >= originalEnd;
+            });
+            admin.incrementalAlterConfigs(Map.of(new ConfigResource(ConfigResource.Type.TOPIC, topic), List.of(
+                    new AlterConfigOp(new ConfigEntry("retention.ms", "86400000"), AlterConfigOp.OpType.SET))))
+                    .all().get(10, TimeUnit.SECONDS);
+            long beforeRecovery = offset(partition, OffsetSpec.latest());
+            consumer.assign(List.of(partition));
+            consumer.seek(partition, beforeRecovery);
+            recoverExpiredRecord(relay, search);
+            var listener = configuration.searchConsumer(executor, configuration.failurePort(SOURCE));
+            consumeRecoveredTwice(consumer, listener, search);
+            assertAll(
+                    () -> assertEquals(PROCESSED, state(search), "El evento recuperado termina el procesamiento"),
+                    () -> assertEquals(1, projectionCount(search), "Reentregar el evento recuperado no duplica el conteo"));
+        } finally {
+            admin.deleteTopics(List.of(topic)).all().get(10, TimeUnit.SECONDS);
+        }
+    }
+
+    private static void confirmOriginalPublication(PublishOutboxService relay) {
+        int first = relay.publishBatch(1);
+        int immediateRetry = relay.publishBatch(1);
+        assertAll(
+                () -> assertEquals(1, first, "El broker confirma el evento original"),
+                () -> assertEquals(0, immediateRetry, "No recupera antes de la antiguedad minima"));
+    }
+
+    private void recoverExpiredRecord(PublishOutboxService relay, SearchSubmission search) {
+        assertAll(
+                () -> assertEquals("PENDING", state(search), "La perdida en Kafka no elimina la aceptacion"),
+                () -> assertEquals(0, projectionCount(search), "El original nunca se proceso"));
+        jdbc.update("UPDATE search_outbox SET available_at = SYSTIMESTAMP - INTERVAL '10' MINUTE "
+                + "WHERE search_id = HEXTORAW(?)", hex(search));
+        assertEquals(1, relay.publishBatch(1), "Recupera el JSON durable despues de perder el original");
+    }
+
+    private static void consumeRecoveredTwice(KafkaConsumer<String, String> consumer,
+            KafkaSearchConsumer listener, SearchSubmission search) {
+        var acknowledgments = new AtomicInteger();
+        var codec = new SearchEventCodec();
+        await().atMost(Duration.ofSeconds(20)).until(() -> {
+            for (var record : consumer.poll(Duration.ofMillis(250))) {
+                assertEquals(search, codec.decode(record.value()), "Recupera el mismo ID y criterios");
+                listener.onMessage(record, acknowledgments::incrementAndGet);
+                listener.onMessage(record, acknowledgments::incrementAndGet);
+            }
+            return acknowledgments.get() == 2;
+        });
+    }
+
+    private long offset(TopicPartition partition, OffsetSpec position)
+            throws InterruptedException, ExecutionException, TimeoutException {
+        return admin.listOffsets(Map.of(partition, position)).all().get(10, TimeUnit.SECONDS).get(partition).offset();
+    }
+
+    private static PublicationResult publishToTestTopic(KafkaProducer<String, String> producer, String topic, UUID id, String json) {
+        try {
+            producer.send(new ProducerRecord<>(topic, id.toString(), json)).get(10, TimeUnit.SECONDS);
+            return PublicationResult.CONFIRMED;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Publicacion de prueba interrumpida", interrupted);
+        } catch (ExecutionException | TimeoutException failure) {
+            throw new IllegalStateException("No se pudo publicar en el topic de prueba", failure);
         }
     }
 

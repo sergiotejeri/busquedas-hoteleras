@@ -74,6 +74,8 @@ Reconstruye el ejecutor cuando cambie el código. Los informes quedan en `test-r
 
 Las pruebas incluyen peticiones simultáneas que recorren HTTP, Kafka y Oracle, comprobando IDs únicos y el conteo de cada grupo.
 
+También comprueban recuperación tras cortes bruscos de una JVM y expiración real de mensajes en un topic temporal. Estas pruebas pueden añadir varios minutos a la ejecución.
+
 `verify` incluye ArchUnit, PMD, SpotBugs, CPD y JaCoCo. Comprueba dependencias entre capas, posibles errores y duplicación, y exige un 85 % de cobertura en líneas, ramas, métodos e instrucciones de bytecode, sin excluir clases. Un incumplimiento hace fallar la construcción. Las reglas están en `config/` y en el POM.
 
 Para exportar los informes de la construcción:
