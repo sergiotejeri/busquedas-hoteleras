@@ -65,12 +65,12 @@ docker build --progress=plain -t busquedas-hoteleras .
 Para ejecutar también las pruebas con Oracle y Kafka reales:
 
 ```shell
-docker compose --profile test build integration-test
-docker compose up -d --wait oracle kafka
-docker compose --profile test run --rm integration-test
+docker compose -p busquedas-hoteleras-tests --profile test build integration-test
+docker compose -p busquedas-hoteleras-tests up -d --wait oracle kafka
+docker compose -p busquedas-hoteleras-tests --profile test run --rm integration-test
 ```
 
-Reconstruye el ejecutor cuando cambie el código. Los informes quedan en `test-results/`: `failsafe-reports/` para integración y `site/jacoco/index.html` para cobertura.
+Las pruebas usan un proyecto separado para no mezclar sus mensajes y datos con la aplicación. Reconstruye el ejecutor cuando cambie el código. Los informes quedan en `test-results/`: `failsafe-reports/` para integración y `site/jacoco/index.html` para cobertura.
 
 Las pruebas incluyen peticiones simultáneas que recorren HTTP, Kafka y Oracle, comprobando IDs únicos y el conteo de cada grupo.
 
