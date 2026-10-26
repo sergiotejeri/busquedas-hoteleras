@@ -32,6 +32,7 @@ import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.TopicPartition;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,18 +40,23 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import com.zaxxer.hikari.HikariDataSource;
+import com.example.busquedashoteleras.infrastructure.oracle.OracleTestDataSources;
 import org.springframework.jdbc.support.JdbcTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
 
 class KafkaPublicationIT {
     private static final String PUBLISHED_STATE = "SENT/PENDING";
-    private static final DriverManagerDataSource SOURCE = new DriverManagerDataSource(
-            required("TEST_DB_URL"), required("TEST_DB_USER"), required("TEST_DB_PASSWORD"));
+    private static final HikariDataSource SOURCE = OracleTestDataSources.create();
     private static final String BOOTSTRAP = required("TEST_KAFKA_BOOTSTRAP_SERVERS");
     private final JdbcTemplate jdbc = new JdbcTemplate(SOURCE);
     private final List<UUID> ids = new ArrayList<>();
+
+    @AfterAll
+    static void closeDataSource() {
+        SOURCE.close();
+    }
 
     @BeforeAll
     static void migrate() {

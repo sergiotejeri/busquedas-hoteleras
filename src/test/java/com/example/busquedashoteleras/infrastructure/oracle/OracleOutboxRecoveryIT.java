@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -35,11 +36,10 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import com.zaxxer.hikari.HikariDataSource;
 
 class OracleOutboxRecoveryIT {
-    private static final DriverManagerDataSource SOURCE = new DriverManagerDataSource(
-            required("TEST_DB_URL"), required("TEST_DB_USER"), required("TEST_DB_PASSWORD"));
+    private static final HikariDataSource SOURCE = OracleTestDataSources.create();
     private static final Duration MINIMUM_AGE = Duration.ofMinutes(5);
     private static final String SENT = "SENT";
     private static final String READY = "READY";
@@ -47,6 +47,11 @@ class OracleOutboxRecoveryIT {
     private final OracleOutboxAdapter outbox = new OracleOutboxAdapter(SOURCE);
     private final List<SearchSubmission> owned = new ArrayList<>();
     private final String hotel = "recovery-" + UUID.randomUUID();
+
+    @AfterAll
+    static void closeDataSource() {
+        SOURCE.close();
+    }
 
     @BeforeAll
     static void migrate() {
@@ -261,9 +266,5 @@ class OracleOutboxRecoveryIT {
 
     private static String hex(SearchSubmission search) {
         return search.searchId().toString().replace("-", "");
-    }
-
-    private static String required(String name) {
-        return Objects.requireNonNull(System.getenv(name), name);
     }
 }

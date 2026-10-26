@@ -25,19 +25,24 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import com.zaxxer.hikari.HikariDataSource;
 
 class OracleProcessingIT {
-    private static final DriverManagerDataSource SOURCE = new DriverManagerDataSource(
-            required("TEST_DB_URL"), required("TEST_DB_USER"), required("TEST_DB_PASSWORD"));
+    private static final HikariDataSource SOURCE = OracleTestDataSources.create();
     private final JdbcTemplate jdbc = new JdbcTemplate(SOURCE);
     private final ProcessSearchService service = new ProcessSearchService(new OracleProcessingAdapter(SOURCE));
     private final List<SearchSubmission> owned = new ArrayList<>();
     private final String hotel = UUID.randomUUID().toString();
+
+    @AfterAll
+    static void closeDataSource() {
+        SOURCE.close();
+    }
 
     @BeforeAll
     static void migrateProjection() {
@@ -253,9 +258,5 @@ class OracleProcessingIT {
 
     private static String id(SearchSubmission submission) {
         return submission.searchId().toString().replace("-", "");
-    }
-
-    private static String required(String name) {
-        return Objects.requireNonNull(System.getenv(name), name);
     }
 }

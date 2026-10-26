@@ -62,6 +62,7 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.config.ConfigResource;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -73,7 +74,8 @@ import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import com.zaxxer.hikari.HikariDataSource;
+import com.example.busquedashoteleras.infrastructure.oracle.OracleTestDataSources;
 import org.springframework.kafka.listener.ConcurrentMessageListenerContainer;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -81,8 +83,7 @@ class KafkaConsumptionIT {
     private static final String TOPIC = KafkaSearchPublisher.TOPIC;
     private static final String SERVERS = required("TEST_KAFKA_BOOTSTRAP_SERVERS");
     private static final String PROCESSED = "PROCESSED";
-    private static final DriverManagerDataSource SOURCE = new DriverManagerDataSource(
-            required("TEST_DB_URL"), required("TEST_DB_USER"), required("TEST_DB_PASSWORD"));
+    private static final HikariDataSource SOURCE = OracleTestDataSources.create();
     private final JdbcTemplate jdbc = new JdbcTemplate(SOURCE);
     private final ConsumptionConfiguration configuration = new ConsumptionConfiguration();
     private final String group = "consumption-" + UUID.randomUUID();
@@ -92,6 +93,11 @@ class KafkaConsumptionIT {
     private Admin admin;
     @TempDir
     private Path temporaryDirectory;
+
+    @AfterAll
+    static void closeDataSource() {
+        SOURCE.close();
+    }
 
     @BeforeAll
     static void migrate() {

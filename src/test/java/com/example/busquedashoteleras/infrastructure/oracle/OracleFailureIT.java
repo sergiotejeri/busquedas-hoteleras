@@ -22,13 +22,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.jdbc.support.JdbcTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -36,12 +37,16 @@ class OracleFailureIT {
     private static final String INVALID_REASON = "INVALID_EVENT";
     private static final String AUDIT_TABLE = "rejected_message";
     private static final String RECEIPT_TABLE = "rejected_message_receipt";
-    private static final DriverManagerDataSource SOURCE = new DriverManagerDataSource(
-            required("TEST_DB_URL"), required("TEST_DB_USER"), required("TEST_DB_PASSWORD"));
+    private static final HikariDataSource SOURCE = OracleTestDataSources.create();
     private final JdbcTemplate jdbc = new JdbcTemplate(SOURCE);
     private final OracleFailureAdapter adapter = new OracleFailureAdapter(SOURCE);
     private final String topic = "quarantine_" + UUID.randomUUID();
     private final UUID searchId = UUID.randomUUID();
+
+    @AfterAll
+    static void closeDataSource() {
+        SOURCE.close();
+    }
 
     @BeforeAll
     static void migrateQuarantine() {
@@ -202,9 +207,5 @@ class OracleFailureIT {
 
     private String text(String column) {
         return jdbc.queryForObject("SELECT " + column + " FROM rejected_message WHERE topic_name = ?", String.class, topic);
-    }
-
-    private static String required(String name) {
-        return Objects.requireNonNull(System.getenv(name), name);
     }
 }

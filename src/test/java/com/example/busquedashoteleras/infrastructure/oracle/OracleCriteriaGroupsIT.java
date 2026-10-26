@@ -28,20 +28,25 @@ import java.util.Objects;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.jdbc.support.JdbcTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 class OracleCriteriaGroupsIT {
-    private static final DriverManagerDataSource SOURCE = new DriverManagerDataSource(
-            required("TEST_DB_URL"), required("TEST_DB_USER"), required("TEST_DB_PASSWORD"));
+    private static final HikariDataSource SOURCE = OracleTestDataSources.create();
     private final JdbcTemplate jdbc = new JdbcTemplate(SOURCE);
     private final OracleCriteriaGroups groups = new OracleCriteriaGroups(SOURCE);
     private final byte[] bucket = UUID.randomUUID().toString().replace("-", "").getBytes(StandardCharsets.US_ASCII);
+
+    @AfterAll
+    static void closeDataSource() {
+        SOURCE.close();
+    }
 
     @BeforeAll
     static void migrateGroups() {
@@ -190,9 +195,5 @@ class OracleCriteriaGroupsIT {
     private static String canonical(String hotel, List<Integer> ages) {
         return new CanonicalCriteriaCodec().encode(new SearchCriteria(hotel,
                 LocalDate.of(2026, 12, 1), LocalDate.of(2026, 12, 3), ages));
-    }
-
-    private static String required(String name) {
-        return Objects.requireNonNull(System.getenv(name), "Missing integration environment: " + name);
     }
 }
