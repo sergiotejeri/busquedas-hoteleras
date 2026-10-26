@@ -28,6 +28,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +36,8 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -73,7 +76,7 @@ class KafkaConsumptionIT {
     private final ConsumptionConfiguration configuration = new ConsumptionConfiguration();
     private final String group = "consumption-" + UUID.randomUUID();
     private final String hotel = "consumer-" + UUID.randomUUID();
-    private final List<SearchSubmission> searches = new ArrayList<>();
+    private final List<SearchSubmission> searches = Collections.synchronizedList(new ArrayList<>());
     private final List<RecordMetadata> sent = new ArrayList<>();
     private Admin admin;
 
@@ -146,6 +149,63 @@ class KafkaConsumptionIT {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void concurrentHttpRequestsKeepIndependentIdsAndExactCounts(boolean mixedGroups)
+            throws InterruptedException, ExecutionException, TimeoutException {
+        List<List<Integer>> criteria = mixedGroups
+                ? List.of(List.of(30, 1), List.of(1, 30), List.of(30, 1, 1))
+                : List.of(List.of(30, 1));
+        List<Integer> totals = mixedGroups ? List.of(9, 6, 3) : List.of(18);
+        try (var context = application(true); var client = HttpClient.newHttpClient()) {
+            String base = "http://localhost:" + context.getEnvironment().getRequiredProperty("local.server.port");
+            List<UUID> acceptedIds = submitConcurrentBatch(client, base, criteria, totals);
+            assertAll(
+                    () -> assertEquals(18L, acceptedIds.stream().distinct().count(), "Cada POST tiene un ID propio"),
+                    () -> checkGroups(client, base, criteria, totals));
+        }
+    }
+
+    private List<UUID> submitConcurrentBatch(HttpClient client, String base, List<List<Integer>> criteria,
+            List<Integer> totals) throws InterruptedException, ExecutionException, TimeoutException {
+        var ready = new CountDownLatch(18);
+        var release = new CountDownLatch(1);
+        List<Future<UUID>> pending = new ArrayList<>();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            try {
+                for (int groupIndex = 0; groupIndex < criteria.size(); groupIndex++) {
+                    List<Integer> ages = criteria.get(groupIndex);
+                    for (int request = 0; request < totals.get(groupIndex); request++) {
+                        pending.add(executor.submit(() -> {
+                            ready.countDown();
+                            assertTrue(release.await(10, TimeUnit.SECONDS), "Se libera el lote concurrente");
+                            return submitHttp(client, base, ages);
+                        }));
+                    }
+                }
+                assertTrue(ready.await(10, TimeUnit.SECONDS), "Todas las peticiones estan listas antes de enviarlas");
+            } finally {
+                release.countDown();
+            }
+            List<UUID> acceptedIds = new ArrayList<>();
+            for (Future<UUID> response : pending) {
+                acceptedIds.add(response.get(15, TimeUnit.SECONDS));
+            }
+            return acceptedIds;
+        }
+    }
+
+    private void checkGroups(HttpClient client, String base, List<List<Integer>> criteria, List<Integer> totals) {
+        for (int groupIndex = 0; groupIndex < criteria.size(); groupIndex++) {
+            List<Integer> ages = criteria.get(groupIndex);
+            int total = totals.get(groupIndex);
+            List<SearchSubmission> members = searches.stream().filter(search -> search.criteria().ages().equals(ages)).toList();
+            assertEquals(total, members.size(), "Se aceptan todas las solicitudes del grupo");
+            await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertAll(members.stream()
+                    .map(search -> () -> checkHttpCount(client, base, search.searchId(), ages, total))));
+        }
+    }
+
     private ConfigurableApplicationContext application(boolean publish) {
         if (publish) {
             requireEmptyQueue();
@@ -210,27 +270,39 @@ class KafkaConsumptionIT {
     }
 
     private UUID submitHttp(HttpClient client, String base) throws IOException, InterruptedException {
-        String body = "{\"hotelId\":\"" + hotel + "\",\"checkIn\":\"01/12/2026\",\"checkOut\":\"03/12/2026\",\"ages\":[30,1]}";
+        return submitHttp(client, base, List.of(30, 1));
+    }
+
+    private UUID submitHttp(HttpClient client, String base, List<Integer> ages) throws IOException, InterruptedException {
+        String body = JsonMapper.builder().build().writeValueAsString(Map.of("hotelId", hotel,
+                "checkIn", "01/12/2026", "checkOut", "03/12/2026", "ages", ages));
         var response = client.send(HttpRequest.newBuilder(URI.create(base + "/search"))
                 .timeout(Duration.ofSeconds(5)).header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
         assertEquals(202, response.statusCode(), response.body());
         UUID id = UUID.fromString(JsonMapper.builder().build().readTree(response.body()).get("searchId").asString());
         searches.add(new SearchSubmission(id, new SearchCriteria(hotel,
-                LocalDate.of(2026, 12, 1), LocalDate.of(2026, 12, 3), List.of(30, 1))));
+                LocalDate.of(2026, 12, 1), LocalDate.of(2026, 12, 3), ages)));
         return id;
     }
 
     private void checkHttpCount(HttpClient client, String base, UUID id) throws IOException, InterruptedException {
+        checkHttpCount(client, base, id, List.of(30, 1), 2);
+    }
+
+    private void checkHttpCount(HttpClient client, String base, UUID id, List<Integer> ages, long count)
+            throws IOException, InterruptedException {
         var response = client.send(HttpRequest.newBuilder(URI.create(base + "/count?searchId=" + id))
                 .timeout(Duration.ofSeconds(5)).GET().build(), HttpResponse.BodyHandlers.ofString());
         var body = JsonMapper.builder().build().readTree(response.body());
         assertAll(
                 () -> assertEquals(200, response.statusCode(), "El consumidor debe terminar el procesamiento"),
                 () -> assertEquals(id.toString(), body.path("searchId").asString(), "Devuelve el ID consultado"),
-                () -> assertEquals(2L, body.path("count").asLong(), "Cuenta ambas solicitudes, incluida la propia"),
+                () -> assertEquals(count, body.path("count").asLong(), "Cuenta solo las solicitudes del mismo grupo"),
                 () -> assertEquals(hotel, body.at("/search/hotelId").asString(), "Conserva el hotel"),
-                () -> assertEquals("[30,1]", body.at("/search/ages").toString(), "Conserva orden y edades"));
+                () -> assertEquals(JsonMapper.builder().build().valueToTree(ages), body.at("/search/ages"), "Conserva orden y edades"),
+                () -> assertEquals("01/12/2026", body.at("/search/checkIn").asString(), "Conserva la entrada"),
+                () -> assertEquals("03/12/2026", body.at("/search/checkOut").asString(), "Conserva la salida"));
     }
 
     @Test

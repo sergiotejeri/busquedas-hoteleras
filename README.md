@@ -72,6 +72,8 @@ docker compose --profile test run --rm integration-test
 
 Reconstruye el ejecutor cuando cambie el código. Los informes quedan en `test-results/`: `failsafe-reports/` para integración y `site/jacoco/index.html` para cobertura.
 
+Las pruebas incluyen peticiones simultáneas que recorren HTTP, Kafka y Oracle, comprobando IDs únicos y el conteo de cada grupo.
+
 `verify` incluye ArchUnit, PMD, SpotBugs, CPD y JaCoCo. Comprueba dependencias entre capas, posibles errores y duplicación, y exige un 85 % de cobertura en líneas, ramas, métodos e instrucciones de bytecode, sin excluir clases. Un incumplimiento hace fallar la construcción. Las reglas están en `config/` y en el POM.
 
 Para exportar los informes de la construcción:
