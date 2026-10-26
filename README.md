@@ -76,6 +76,17 @@ Las pruebas incluyen peticiones simultáneas que recorren HTTP, Kafka y Oracle, 
 
 También comprueban recuperación tras cortes bruscos de una JVM y expiración real de mensajes en un topic temporal. Estas pruebas pueden añadir varios minutos a la ejecución.
 
+Para medir una carga de 200 POST y 400 GET con 16 clientes, y comprobar los datos tras un reinicio:
+
+```shell
+docker compose --profile load run --build --rm load-test
+docker compose stop
+docker compose up -d app topic-init
+docker compose --profile load run --rm -e LOAD_MODE=verify load-test
+```
+
+Añade diez búsquedas de calentamiento y conserva las 210 solicitudes. Los informes `test-results/http-load*.json` incluyen tiempos, percentiles y comprobaciones. Es una carga concreta en el equipo donde se ejecuta, no una medida de capacidad máxima.
+
 `verify` incluye ArchUnit, PMD, SpotBugs, CPD y JaCoCo. Comprueba dependencias entre capas, posibles errores y duplicación, y exige un 85 % de cobertura en líneas, ramas, métodos e instrucciones de bytecode, sin excluir clases. Un incumplimiento hace fallar la construcción. Las reglas están en `config/` y en el POM.
 
 Para exportar los informes de la construcción:

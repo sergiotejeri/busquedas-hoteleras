@@ -77,6 +77,23 @@ services:
     command: ["--create", "--if-not-exists", "--topic", "hotel_availability_searches", "--partitions", "3", "--replication-factor", "1", "--bootstrap-server", "kafka:9092"]
     restart: "no"
     networks: [backend]
+  load-test:
+    profiles: [load]
+    build:
+      context: .
+      target: integration-test
+    environment:
+      LOAD_BASE_URL: http://app:8080
+      LOAD_REPORT: /reports/http-load.json
+    entrypoint: ["sh", "-c", "./mvnw -B -ntp test-compile failsafe:integration-test failsafe:verify -Pintegration -Dit.test=HttpLoadCheck; result=$$?; cp -R target/failsafe-reports /reports/ || exit 1; exit \"$$result\""]
+    volumes:
+      - ./test-results:/reports
+    depends_on:
+      app:
+        condition: service_started
+      topic-init:
+        condition: service_completed_successfully
+    networks: [backend, dependencies]
   integration-test:
     profiles: [test]
     build:
