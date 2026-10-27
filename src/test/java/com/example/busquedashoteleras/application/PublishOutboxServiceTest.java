@@ -33,7 +33,8 @@ class PublishOutboxServiceTest {
 
     @Test
     void publishesSequentiallyAndCountsOnlyCommittedConfirmations() {
-        when(outbox.claimNext(Duration.ofSeconds(60))).thenReturn(Optional.of(FIRST), Optional.of(SECOND), Optional.empty());
+        when(outbox.claimNext(Duration.ofSeconds(60))).thenReturn(Optional.of(FIRST))
+                .thenReturn(Optional.of(SECOND)).thenReturn(Optional.empty());
         when(publisher.publish(any(), any())).thenReturn(PublicationResult.CONFIRMED);
         when(outbox.markSent(any(), any())).thenReturn(true);
         int sent = new PublishOutboxService(outbox, publisher).publishBatch(100);
@@ -87,7 +88,8 @@ class PublishOutboxServiceTest {
 
     @Test
     void isolatesPermanentEventFailureAndContinuesWithNext() {
-        when(outbox.claimNext(any())).thenReturn(Optional.of(FIRST), Optional.of(SECOND), Optional.empty());
+        when(outbox.claimNext(any())).thenReturn(Optional.of(FIRST))
+                .thenReturn(Optional.of(SECOND)).thenReturn(Optional.empty());
         when(publisher.publish(FIRST.searchId(), FIRST.eventJson())).thenReturn(PublicationResult.PERMANENT_FAILURE);
         when(publisher.publish(SECOND.searchId(), SECOND.eventJson())).thenReturn(PublicationResult.CONFIRMED);
         when(outbox.markFailed(FIRST.searchId(), FIRST.token())).thenReturn(true);
